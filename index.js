@@ -25,6 +25,42 @@ bot.on('message', async (ctx) => {
             if (ctx.message.document) fileName = ctx.message.document.file_name;
             else if (ctx.message.video) fileName = ctx.message.video.file_name || "Video File";
 
+            // --- नए फीचर का लॉजिक यहाँ से शुरू ---
+            let caption = ctx.message.caption || "";
+            let watchOnlineUrl = null;
+
+            // कैप्शन में से URL (http/https) ढूंढने के लिए Regular Expression
+            const urlRegex = /(https?:\/\/[^\s]+)/gi;
+            const match = caption.match(urlRegex);
+
+            if (match && match.length > 0) {
+                watchOnlineUrl = match[0]; // पहला लिंक निकाल लिया
+                caption = caption.replace(watchOnlineUrl, "").trim(); // कैप्शन से लिंक हटा दिया
+                
+                // टेलीग्राम API का उपयोग करके मौजूदा मैसेज को नए कैप्शन और बटन के साथ एडिट कर रहे हैं
+                try {
+                    let extraOptions = {
+                        caption: caption,
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.url('🍿 Watch Online', watchOnlineUrl)]
+                        ])
+                    };
+
+                    if (ctx.message.photo) {
+                        await ctx.telegram.editMessageCaption(ctx.chat.id, ctx.message.message_id, null, caption, {
+                            reply_markup: extraOptions.reply_markup
+                        });
+                    } else if (ctx.message.video || ctx.message.document || ctx.message.audio) {
+                        await ctx.telegram.editMessageCaption(ctx.chat.id, ctx.message.message_id, null, caption, {
+                            reply_markup: extraOptions.reply_markup
+                        });
+                    }
+                } catch (editError) {
+                    console.log("Error adding inline button to original post:", editError.message);
+                }
+            }
+            // --- नए फीचर का लॉजिक यहाँ समाप्त ---
+
             const msgIdStr = ctx.message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
