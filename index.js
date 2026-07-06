@@ -257,14 +257,11 @@ bot.on('message', async (ctx) => {
 
         if (!param.startsWith('getfile_')) {
             const fileData = fileDb.get(param);
-            
-            // ⏱️ UPDATE: Title ko fetch karne ke liye database se sahi naam nikala gaya hai
-            const actualFileName = fileData ? fileData.name : "Unknown File";
             const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
 
-            // ⏱️ UPDATE: Message format ko aapki query ke anusaar badal diya hai
+            // ✨ UPDATE: File name completely hata diya hai aur text ko ekdum clean, professional aur high-CTR attractive bana diya hai.
             const webAppMsg = await ctx.reply(
-                `✨ **Your Requested File**\n\n📂 **File Name:** \`${actualFileName}\`\n\n👇 Click the button below to open the secure downloader and unlock your file.`,
+                `✨ **YOUR REQUESTED FILE IS READY!**\n\n🔒 *Your secure download link has been generated successfully. Click the button below to open the downloader and unlock your file.*\n\n👇  👇  👇`,
                 {
                     parse_mode: 'Markdown',
                     ...Markup.inlineKeyboard([
