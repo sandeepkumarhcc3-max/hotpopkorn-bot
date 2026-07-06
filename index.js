@@ -15,9 +15,6 @@ const bot = new Telegraf(BOT_TOKEN);
 const fileDb = new Map();
 const userStates = new Map();
 
-// Restore progress (Pagination) yaad rakhne ke liye variable
-let lastRestoredMsgId = null;
-
 // RENDER FREE TIER FIX
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
@@ -25,67 +22,57 @@ http.createServer((req, res) => {
     res.end('Bot is running safely!');
 }).listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 
+// Helper function: Backup group me log bhejkar use pin karne ke liye
+async function saveToBackup(param, msgId, name) {
+    try {
+        const logText = `DATABASE_LOG:\nPARAM: ${param}\nMSG_ID: ${msgId}\nNAME: ${name}`;
+        const sentLog = await bot.telegram.sendMessage(BACKUP_GROUP_ID, logText);
+        // Pinned messages ke jariye telegram bot history ki limitation ko bypass karega
+        await bot.telegram.pinChatMessage(BACKUP_GROUP_ID, sentLog.message_id, { disable_notification: true });
+    } catch (err) {
+        console.error("Backup Save/Pin Error:", err.message);
+    }
+}
+
 // 1. DATABASE GROUP & BACKUP RESTORE LOGIC
 bot.on('message', async (ctx) => {
     const text = ctx.message.text || '';
     const userId = ctx.from.id;
     const currentState = userStates.get(userId);
 
-    // --- Backup Group me /restore command logic (Fixed getChatHistory Function) ---
+    // --- Pinned Messages se Memory Restore karne ka logic ---
     if (ctx.chat.id === BACKUP_GROUP_ID && text.startsWith('/restore')) {
         try {
-            // Telegraf library ke purane version ke liye query params taiyar karna
-            let apiParams = { 
-                chat_id: ctx.chat.id,
-                limit: 100 
-            };
+            await ctx.reply("🔄 **Memory restoration started...** Pinned मैसेजेस से डेटा रिकवर किया जा रहा है।");
             
-            if (lastRestoredMsgId) {
-                apiParams.offset_id = lastRestoredMsgId;
-                await ctx.reply(`🔄 **Next Batch:** Message ID ${lastRestoredMsgId} ke pehle ke purane messages scan kiye ja rahe hain...`);
-            } else {
-                await ctx.reply("🔄 **First Batch:** Sabse naye 100 messages scan kiye ja rahe hain...");
-            }
+            // Telegram bot ko pinned messages nikalne ki full permission hoti hai
+            const fullChat = await ctx.telegram.getChat(BACKUP_GROUP_ID);
             
-            // FIX: Purane Telegraf versions me callApi ka use karke direct telegram history fetch ki jati hai
-            const logs = await ctx.telegram.callApi('getChatHistory', apiParams);
-            
-            if (!logs || logs.length === 0) {
-                lastRestoredMsgId = null; // Progress reset
-                return ctx.reply("🏁 **All Done!** Backup group me ab scan karne ke liye koi aur purana message nahi bacha hai.");
+            // Agar pinned message milta hai
+            if (!fullChat.pinned_message) {
+                return ctx.reply("🏁 **Restore Complete!** ग्रुप में कोई भी पिन किया हुआ लॉग मेसेज नहीं मिला।");
             }
 
+            // Pinned message ko as a starting point use karke restore karna
             let restoredCount = 0;
+            const logText = fullChat.pinned_message.text || '';
 
-            for (const log of logs) {
-                if (log.text && log.text.includes('DATABASE_LOG:')) {
-                    const paramMatch = log.text.match(/PARAM:\s*([^\s|]+)/);
-                    const msgIdMatch = log.text.match(/MSG_ID:\s*(\d+)/);
-                    const nameMatch = log.text.match(/NAME:\s*(.+)$/m);
+            if (logText.includes('DATABASE_LOG:')) {
+                const paramMatch = logText.match(/PARAM:\s*([^\s|]+)/);
+                const msgIdMatch = logText.match(/MSG_ID:\s*(\d+)/);
+                const nameMatch = logText.match(/NAME:\s*(.+)$/m);
 
-                    if (paramMatch && msgIdMatch && nameMatch) {
-                        const param = paramMatch[1];
-                        const messageId = parseInt(msgIdMatch[1]);
-                        const fileName = nameMatch[1].trim();
-
-                        fileDb.set(param, { messageId, name: fileName });
-                        restoredCount++;
-                    }
+                if (paramMatch && msgIdMatch && nameMatch) {
+                    fileDb.set(paramMatch[1], { messageId: parseInt(msgIdMatch[1]), name: nameMatch[1].trim() });
+                    restoredCount++;
                 }
-                // Agle batch ke liye sabse aakhri message ID track karna
-                lastRestoredMsgId = log.message_id;
             }
 
-            return ctx.reply(
-                `📊 **Batch Restored!**\n\nIs batch me **${restoredCount}** links reload hue.\nKul active links (Memory): **${fileDb.size}**\n\n👇 Iske aur peeche (purane) links load karne ke liye neeche diye button par click karein ya fir se \`/restore\` likhein.`,
-                Markup.inlineKeyboard([
-                    [Markup.button.callback('🔄 Load Next 100 Files', 'load_more_backup')]
-                ])
-            );
+            return ctx.reply(`📊 **Restoration Complete!** Pinned डेटा से **${restoredCount}** मुख्य लिंक सफलताली रीलोड कर ली गई है।\n\nTotal Active Links: **${fileDb.size}**`);
 
         } catch (restoreErr) {
             console.error("Restore Error:", restoreErr);
-            return ctx.reply(`❌ **Restore karne me samasya aai.**\n\n**Technical Error:** \`${restoreErr.message}\``);
+            return ctx.reply(`❌ **Restore करने में समस्या आई।**\n\n**Technical Error:** \`${restoreErr.message}\``);
         }
     }
 
@@ -194,8 +181,8 @@ bot.on('message', async (ctx) => {
 
                 fileDb.set(encodedParam, { messageId: finalPost.message_id, name: fileData.fileName });
 
-                // 💾 Backup group me data store karna
-                await ctx.telegram.sendMessage(BACKUP_GROUP_ID, `DATABASE_LOG:\nPARAM: ${encodedParam}\nMSG_ID: ${finalPost.message_id}\nNAME: ${fileData.fileName}`);
+                // 💾 Backup group me data bhejna aur PIN karna
+                await saveToBackup(encodedParam, finalPost.message_id, fileData.fileName);
 
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
 
@@ -256,8 +243,8 @@ bot.on('message', async (ctx) => {
 
             fileDb.set(encodedParam, { messageId: ctx.message.message_id, name: fileName });
 
-            // 💾 Normal file ka bhi backup log bhejna
-            await ctx.telegram.sendMessage(BACKUP_GROUP_ID, `DATABASE_LOG:\nPARAM: ${encodedParam}\nMSG_ID: ${ctx.message.message_id}\nNAME: ${fileName}`);
+            // 💾 Normal file ko bhi backup bhejkar PIN karna
+            await saveToBackup(encodedParam, ctx.message.message_id, fileName);
 
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **File Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
@@ -309,14 +296,6 @@ bot.on('message', async (ctx) => {
             }
         }
     }
-});
-
-// Inline button 'Load Next 100 Files' click handler
-bot.action('load_more_backup', async (ctx) => {
-    await ctx.answerCbQuery();
-    ctx.message = { text: '/restore', chat: { id: BACKUP_GROUP_ID } };
-    ctx.from = ctx.callbackQuery.from;
-    return bot.handleUpdate(ctx.update);
 });
 
 bot.launch().then(() => console.log("Hotpopkornbot is now online..."));
