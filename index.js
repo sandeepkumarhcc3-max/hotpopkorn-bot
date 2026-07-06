@@ -31,20 +31,24 @@ bot.on('message', async (ctx) => {
     const userId = ctx.from.id;
     const currentState = userStates.get(userId);
 
-    // --- Backup Group me /restore command logic (With Smart Pagination Fix) ---
+    // --- Backup Group me /restore command logic (Fixed getChatHistory Function) ---
     if (ctx.chat.id === BACKUP_GROUP_ID && text.startsWith('/restore')) {
         try {
-            let options = { limit: 100 };
+            // Telegraf library ke purane version ke liye query params taiyar karna
+            let apiParams = { 
+                chat_id: ctx.chat.id,
+                limit: 100 
+            };
             
             if (lastRestoredMsgId) {
-                options.offset_id = lastRestoredMsgId;
+                apiParams.offset_id = lastRestoredMsgId;
                 await ctx.reply(`🔄 **Next Batch:** Message ID ${lastRestoredMsgId} ke pehle ke purane messages scan kiye ja rahe hain...`);
             } else {
                 await ctx.reply("🔄 **First Batch:** Sabse naye 100 messages scan kiye ja rahe hain...");
             }
             
-            // FIX: BACKUP_GROUP_ID ki jagah seedhe ctx.chat.id ka use kiya hai
-            const logs = await ctx.telegram.getChatHistory(ctx.chat.id, options);
+            // FIX: Purane Telegraf versions me callApi ka use karke direct telegram history fetch ki jati hai
+            const logs = await ctx.telegram.callApi('getChatHistory', apiParams);
             
             if (!logs || logs.length === 0) {
                 lastRestoredMsgId = null; // Progress reset
@@ -81,7 +85,6 @@ bot.on('message', async (ctx) => {
 
         } catch (restoreErr) {
             console.error("Restore Error:", restoreErr);
-            // FIX: Agar koi dikkat aayegi toh ab ye seedhe asli technical error message screen par dega
             return ctx.reply(`❌ **Restore karne me samasya aai.**\n\n**Technical Error:** \`${restoreErr.message}\``);
         }
     }
@@ -298,7 +301,6 @@ bot.on('message', async (ctx) => {
                 setTimeout(async () => {
                     try {
                         await ctx.telegram.deleteMessage(ctx.chat.id, forwardedMsg.message_id);
-                        // FIX: warningMsg ka double variable hata diya hai yahan
                         await ctx.telegram.deleteMessage(ctx.chat.id, warningMsg.message_id);
                     } catch (err) { console.log("Error during auto-deletion:", err.message); }
                 }, 1800000); 
