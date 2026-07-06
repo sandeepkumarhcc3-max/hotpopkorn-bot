@@ -11,6 +11,15 @@ const PRIVATE_CHANNEL_ID = -1003900661218;
 // 📁 Aapki backup group ki ID set hai
 const BACKUP_GROUP_ID = -1004314246888; 
 
+// 👑 ADMIN BYPASS SYSTEM
+const ADMIN_IDS = [5328189325];
+
+// 📢 Force Join Channels & Links Configuration
+const MAIN_CH_ID = "-1003933920647";
+const MAIN_CH_LINK = "https://t.me/popkornmovie_1";
+const BACKUP_CH_ID = "-1003900661218";
+const BACKUP_CH_LINK = "https://t.me/+1A7MUa-fD71jNDk1";
+
 const bot = new Telegraf(BOT_TOKEN);
 const fileDb = new Map();
 const userStates = new Map();
@@ -30,6 +39,130 @@ async function saveToBackup(param, msgId, name) {
         await bot.telegram.pinChatMessage(BACKUP_GROUP_ID, sentLog.message_id, { disable_notification: true });
     } catch (err) {
         console.error("Backup Save/Pin Error:", err.message);
+    }
+}
+
+// 🔒 Force-Join check: returns which channels the user still needs to join
+async function checkForceJoin(ctx, userId) {
+    // 👑 Admin bypass
+    if (ADMIN_IDS.includes(userId)) {
+        return { isSubscribedToBackup: true, isSubscribedToMain: true };
+    }
+
+    let isSubscribedToBackup = false;
+    let isSubscribedToMain = false;
+    const allowedStatuses = ['member', 'administrator', 'creator'];
+
+    try {
+        const member = await ctx.telegram.getChatMember(BACKUP_CH_ID, userId);
+        if (member && allowedStatuses.includes(member.status)) isSubscribedToBackup = true;
+    } catch (err) {
+        console.error("Error checking backup channel status:", err.message);
+    }
+
+    try {
+        const member = await ctx.telegram.getChatMember(MAIN_CH_ID, userId);
+        if (member && allowedStatuses.includes(member.status)) isSubscribedToMain = true;
+    } catch (err) {
+        console.error("Error checking main channel status:", err.message);
+    }
+
+    return { isSubscribedToBackup, isSubscribedToMain };
+}
+
+// 🔒 Sends the correct "please join" message depending on what's missing.
+// Returns true if user is fully verified (both joined), false if a join message was sent.
+async function enforceJoinOrPrompt(ctx, userId, param) {
+    const { isSubscribedToBackup, isSubscribedToMain } = await checkForceJoin(ctx, userId);
+
+    if (!isSubscribedToBackup) {
+        await ctx.reply(
+            "🔒 Access denied. Join our Backup Channel to unlock your file. You haven't joined it yet.",
+            Markup.inlineKeyboard([
+                [Markup.button.url('📢 Join Backup Channel', BACKUP_CH_LINK)],
+                [Markup.button.callback('✅ I\'ve Joined', `check_join_${param}`)]
+            ])
+        );
+        return false;
+    }
+
+    if (!isSubscribedToMain) {
+        await ctx.reply(
+            "🔒 Access denied. Join our Main Channel first, then your file will unlock.",
+            Markup.inlineKeyboard([
+                [Markup.button.url('📢 Join Main Channel', MAIN_CH_LINK)],
+                [Markup.button.callback('✅ I\'ve Joined', `check_join_${param}`)]
+            ])
+        );
+        return false;
+    }
+
+    return true;
+}
+
+// 🔁 Recheck button handler
+bot.action(/check_join_(.+)/, async (ctx) => {
+    const userId = ctx.from.id;
+    const param = ctx.match[1];
+
+    const verified = await enforceJoinOrPrompt(ctx, userId, param);
+    if (!verified) {
+        // Still missing a channel — enforceJoinOrPrompt already sent the next prompt.
+        await ctx.answerCbQuery("You still need to join a channel.");
+        return;
+    }
+
+    await ctx.answerCbQuery("Verified! Unlocking your file...");
+    try {
+        await ctx.deleteMessage();
+    } catch (e) {}
+
+    // Same delivery logic as the /start handler, reused here after verification.
+    await deliverFile(ctx, param);
+});
+
+// 📦 Extracted file-delivery logic so both /start and the recheck button can use it
+async function deliverFile(ctx, param) {
+    if (!param.startsWith('getfile_')) {
+        const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
+
+        const webAppMsg = await ctx.reply(
+            `✨ **YOUR REQUESTED FILE IS READY!**\n\n🔒 *Your secure download link has been generated successfully. Click the button below to open the downloader and unlock your file.*\n\n👇  👇  👇`,
+            {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.webApp('📥 Download Now', webAppFinalUrl)]
+                ])
+            }
+        );
+
+        setTimeout(async () => {
+            try {
+                await ctx.telegram.deleteMessage(ctx.chat.id, webAppMsg.message_id);
+                console.log("WebApp URL message deleted automatically after 2 minutes.");
+            } catch (err) { console.log("Error during WebApp message auto-deletion:", err.message); }
+        }, 120000);
+    }
+    else {
+        const cleanParam = param.replace('getfile_', '');
+        const fileData = fileDb.get(cleanParam);
+
+        if (!fileData) return ctx.reply("❌ Link expired or invalid! Please get a new link from the channel.");
+
+        try {
+            await ctx.reply("🚀 Processing your secure link... Sending file...");
+            const forwardedMsg = await ctx.telegram.forwardMessage(ctx.chat.id, DATABASE_GROUP_ID, fileData.messageId);
+            const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies.Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
+
+            setTimeout(async () => {
+                try {
+                    await ctx.telegram.deleteMessage(ctx.chat.id, forwardedMsg.message_id);
+                    await ctx.telegram.deleteMessage(ctx.chat.id, warningMsg.message_id);
+                } catch (err) { console.log("Error during auto-deletion:", err.message); }
+            }, 1800000);
+        } catch (err) {
+            ctx.reply("❌ Error delivering file. Make sure the bot is an Admin in the database group.");
+        }
     }
 }
 
@@ -288,48 +421,11 @@ bot.on('message', async (ctx) => {
         const param = text.split(' ')[1];
         if (!param) return ctx.reply("👋 Welcome! Please click a file link from our channel to download.");
 
-        if (!param.startsWith('getfile_')) {
-            const fileData = fileDb.get(param);
-            const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
+        // 🔒 Force-join gate: user must join Backup Channel, then Main Channel, before getting the file
+        const verified = await enforceJoinOrPrompt(ctx, userId, param);
+        if (!verified) return; // enforceJoinOrPrompt already sent the correct "please join" message
 
-            const webAppMsg = await ctx.reply(
-                `✨ **YOUR REQUESTED FILE IS READY!**\n\n🔒 *Your secure download link has been generated successfully. Click the button below to open the downloader and unlock your file.*\n\n👇  👇  👇`,
-                {
-                    parse_mode: 'Markdown',
-                    ...Markup.inlineKeyboard([
-                        [Markup.button.webApp('📥 Download Now', webAppFinalUrl)]
-                    ])
-                }
-            );
-
-            setTimeout(async () => {
-                try {
-                    await ctx.telegram.deleteMessage(ctx.chat.id, webAppMsg.message_id);
-                    console.log("WebApp URL message deleted automatically after 2 minutes.");
-                } catch (err) { console.log("Error during WebApp message auto-deletion:", err.message); }
-            }, 120000);
-        } 
-        else if (param.startsWith('getfile_')) {
-            const cleanParam = param.replace('getfile_', '');
-            const fileData = fileDb.get(cleanParam);
-
-            if (!fileData) return ctx.reply("❌ Link expired or invalid! Please get a new link from the channel.");
-
-            try {
-                await ctx.reply("🚀 Processing your secure link... Sending file...");
-                const forwardedMsg = await ctx.telegram.forwardMessage(ctx.chat.id, DATABASE_GROUP_ID, fileData.messageId);
-                const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies.Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
-
-                setTimeout(async () => {
-                    try {
-                        await ctx.telegram.deleteMessage(ctx.chat.id, forwardedMsg.message_id);
-                        await ctx.telegram.deleteMessage(ctx.chat.id, warningMsg.message_id);
-                    } catch (err) { console.log("Error during auto-deletion:", err.message); }
-                }, 1800000); 
-            } catch (err) {
-                ctx.reply("❌ Error delivering file. Make sure the bot is an Admin in the database group.");
-            }
-        }
+        await deliverFile(ctx, param);
     }
 });
 
