@@ -5,10 +5,10 @@ const BOT_TOKEN = '8869980874:AAE_MTb64po36ocmbLFdMtxwCPHT4a9UZ7g';
 const DATABASE_GROUP_ID = -1003927356068; 
 const WEBAPP_URL = 'https://hotpopkornbotwebapp.vercel.app'; 
 
-// 📢 Force Join Channels & Links Configuration
-const MAIN_CH_ID = -1003933920647;
+// 📢 Force Join Channels & Links Configuration (IDs converted to Strings for API stability)
+const MAIN_CH_ID = "-1003933920647";
 const MAIN_CH_LINK = "https://t.me/popkornmovie_1";
-const BACKUP_CH_ID = -1003900661218; 
+const BACKUP_CH_ID = "-1003900661218"; 
 const BACKUP_CH_LINK = "https://t.me/+1A7MUa-fD71jNDk1";
 
 // 📁 Aapki backup group ki ID set hai (Jahan logs pin hote hain)
@@ -48,7 +48,7 @@ async function checkForceJoin(ctx, userId) {
             isSubscribedToBackup = true;
         }
     } catch (err) {
-        console.error("Error checking backup channel status:", err.message);
+        console.error("Error checking backup channel status:", err.message, "ID used:", BACKUP_CH_ID);
     }
 
     // Check Main Channel
@@ -58,7 +58,7 @@ async function checkForceJoin(ctx, userId) {
             isSubscribedToMain = true;
         }
     } catch (err) {
-        console.error("Error checking main channel status:", err.message);
+        console.error("Error checking main channel status:", err.message, "ID used:", MAIN_CH_ID);
     }
 
     return { isSubscribedToBackup, isSubscribedToMain };
@@ -307,12 +307,12 @@ bot.on('message', async (ctx) => {
         // --- FORCE JOIN VERIFICATION SYSTEM ---
         const { isSubscribedToBackup, isSubscribedToMain } = await checkForceJoin(ctx, userId);
 
-        // Agar user dono me se kisi ek me bhi nahi hai, toh access deny hoga
+        // Access check logic
         if (!isSubscribedToBackup || !isSubscribedToMain) {
             const buttons = [];
             
-            // 📝 Simple and professional English message for global users
-            let alertText = "⚠️ **Access Denied!**\n\nTo download your requested file, you must join our channels first. Please click the buttons below to join, then try again.";
+            // 📝 Clean & Simple English Message
+            let alertText = "⚠️ **Access Denied!**\n\nYou must join our channels to download this file. Please click the buttons below to join, then refresh.";
 
             if (!isSubscribedToBackup) {
                 buttons.push([Markup.button.url('📢 Join Backup Channel', BACKUP_CH_LINK)]);
@@ -376,4 +376,4 @@ bot.on('message', async (ctx) => {
     }
 });
 
-bot.launch().then(() => console.log("Hotpopkornbot is online with Fixes..."));
+bot.launch().then(() => console.log("Hotpopkornbot is online with stable String IDs..."));
