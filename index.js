@@ -5,17 +5,17 @@ const BOT_TOKEN = '8869980874:AAE_MTb64po36ocmbLFdMtxwCPHT4a9UZ7g';
 const DATABASE_GROUP_ID = -1003927356068; 
 const WEBAPP_URL = 'https://hotpopkornbotwebapp.vercel.app'; 
 
-// 📢 आपकी प्राइवेट चैनल की ID
+// 📢 Aapki private channel ki ID set hai
 const PRIVATE_CHANNEL_ID = -1003900661218; 
 
-// 📁 आपकी नई बैकअप ग्रुप की ID यहाँ सेट कर दी गई है
+// 📁 Aapki backup group ki ID set hai
 const BACKUP_GROUP_ID = -1004314246888; 
 
 const bot = new Telegraf(BOT_TOKEN);
 const fileDb = new Map();
 const userStates = new Map();
 
-// रीस्टोर प्रोग्रेस (Pagination) याद रखने के लिए ग्लोबल वेरिएबल
+// Restore progress (Pagination) yaad rakhne ke liye variable
 let lastRestoredMsgId = null;
 
 // RENDER FREE TIER FIX
@@ -31,23 +31,24 @@ bot.on('message', async (ctx) => {
     const userId = ctx.from.id;
     const currentState = userStates.get(userId);
 
-    // --- बैकअप ग्रुप में /restore कमांड लॉजिक (With Smart Pagination) ---
+    // --- Backup Group me /restore command logic (With Smart Pagination Fix) ---
     if (ctx.chat.id === BACKUP_GROUP_ID && text.startsWith('/restore')) {
         try {
             let options = { limit: 100 };
             
             if (lastRestoredMsgId) {
                 options.offset_id = lastRestoredMsgId;
-                await ctx.reply(`🔄 **Next Batch:** मेसेज ID ${lastRestoredMsgId} के पहले के पुराने मैसेजेस स्कैन किए जा रहे हैं...`);
+                await ctx.reply(`🔄 **Next Batch:** Message ID ${lastRestoredMsgId} ke pehle ke purane messages scan kiye ja rahe hain...`);
             } else {
-                await ctx.reply("🔄 **First Batch:** सबसे नए 100 मैसेजेस स्कैन किए जा रहे हैं...");
+                await ctx.reply("🔄 **First Batch:** Sabse naye 100 messages scan kiye ja rahe hain...");
             }
             
-            const logs = await ctx.telegram.getChatHistory(BACKUP_GROUP_ID, options);
+            // FIX: BACKUP_GROUP_ID ki jagah seedhe ctx.chat.id ka use kiya hai
+            const logs = await ctx.telegram.getChatHistory(ctx.chat.id, options);
             
-            if (logs.length === 0) {
-                lastRestoredMsgId = null; // प्रोग्रेस रीसेट
-                return ctx.reply("🏁 **All Done!** बैकअप ग्रुप में अब स्कैन करने के लिए कोई और पुराना मैसेज नहीं बचा है।");
+            if (!logs || logs.length === 0) {
+                lastRestoredMsgId = null; // Progress reset
+                return ctx.reply("🏁 **All Done!** Backup group me ab scan karne ke liye koi aur purana message nahi bacha hai.");
             }
 
             let restoredCount = 0;
@@ -67,12 +68,12 @@ bot.on('message', async (ctx) => {
                         restoredCount++;
                     }
                 }
-                // अगले बैच के लिए सबसे आखिरी मैसेज ID ट्रैक करना
+                // Agle batch ke liye sabse aakhri message ID track karna
                 lastRestoredMsgId = log.message_id;
             }
 
             return ctx.reply(
-                `📊 **Batch Restored!**\n\nइस बैच में **${restoredCount}** लिंक्स रीलोड हुए।\nकुल एक्टिव लिंक्स (Memory): **${fileDb.size}**\n\n👇 इसके और पीछे (पुराने) लिंक्स लोड करने के लिए नीचे दिए बटन पर क्लिक करें या फिर से \`/restore\` लिखें।`,
+                `📊 **Batch Restored!**\n\nIs batch me **${restoredCount}** links reload hue.\nKul active links (Memory): **${fileDb.size}**\n\n👇 Iske aur peeche (purane) links load karne ke liye neeche diye button par click karein ya fir se \`/restore\` likhein.`,
                 Markup.inlineKeyboard([
                     [Markup.button.callback('🔄 Load Next 100 Files', 'load_more_backup')]
                 ])
@@ -80,14 +81,15 @@ bot.on('message', async (ctx) => {
 
         } catch (restoreErr) {
             console.error("Restore Error:", restoreErr);
-            return ctx.reply("❌ Restore करने में समस्या आई। जांचें कि बॉट बैकअप ग्रुप में Admin है।");
+            // FIX: Agar koi dikkat aayegi toh ab ye seedhe asli technical error message screen par dega
+            return ctx.reply(`❌ **Restore karne me samasya aai.**\n\n**Technical Error:** \`${restoreErr.message}\``);
         }
     }
 
-    // मुख्य डेटाबेस ग्रुप का लॉजिक
+    // Main database group ka logic
     if (ctx.chat.id === DATABASE_GROUP_ID) {
 
-        // --- कस्टमाइज्ड /inline कमांड लॉजिक ---
+        // --- Customized /inline command logic ---
         if (text.startsWith('/inline')) {
             userStates.set(userId, { step: 'AWAITING_FILE' });
             return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...", {
@@ -96,10 +98,10 @@ bot.on('message', async (ctx) => {
             });
         }
 
-        // --- /forward कमांड लॉजिक ---
+        // --- /forward command logic ---
         if (text.startsWith('/forward')) {
             if (!currentState || !currentState.lastTrackedLink) {
-                return ctx.reply("❌ **No recent file found!** पहले `/inline` प्रोसेस पूरी करें।", {
+                return ctx.reply("❌ **No recent file found!** Pehle `/inline` process poori karein.", {
                     reply_to_message_id: ctx.message.message_id,
                     parse_mode: 'Markdown'
                 });
@@ -114,7 +116,7 @@ bot.on('message', async (ctx) => {
             });
         }
 
-        // स्टेप 2: फाइल रिसीव करना (जब /inline मोड एक्टिव हो)
+        // Step 2: File receive karna
         if (currentState && currentState.step === 'AWAITING_FILE') {
             let hasFile = ctx.message.document || ctx.message.video || ctx.message.audio || ctx.message.photo;
             if (!hasFile) {
@@ -157,7 +159,7 @@ bot.on('message', async (ctx) => {
             });
         }
 
-        // स्टेप 3: लिंक रिसीव करना, पोस्ट बनाना और बैकअप में लॉग भेजना
+        // Step 3: Link receive karna aur backup me log bhejna
         if (currentState && currentState.step === 'AWAITING_LINK') {
             const urlRegex = /(https?:\/\/[^\s]+)/gi;
             const match = text.match(urlRegex);
@@ -189,7 +191,7 @@ bot.on('message', async (ctx) => {
 
                 fileDb.set(encodedParam, { messageId: finalPost.message_id, name: fileData.fileName });
 
-                // 💾 बैकअप ग्रुप में डेटा स्टोर करना
+                // 💾 Backup group me data store karna
                 await ctx.telegram.sendMessage(BACKUP_GROUP_ID, `DATABASE_LOG:\nPARAM: ${encodedParam}\nMSG_ID: ${finalPost.message_id}\nNAME: ${fileData.fileName}`);
 
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
@@ -212,7 +214,7 @@ bot.on('message', async (ctx) => {
             }
         }
 
-        // स्टेप 4: /forward के बाद नया टाइटल लेकर प्राइवेट चैनल में भेजना
+        // Step 4: /forward ke baad naya title lekar private channel me bhejna
         if (currentState && currentState.step === 'AWAITING_TITLE') {
             const newTitle = text;
             const fileData = currentState;
@@ -232,14 +234,14 @@ bot.on('message', async (ctx) => {
                 else if (fileData.fileType === 'document') await ctx.telegram.sendDocument(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
                 else if (fileData.fileType === 'audio') await ctx.telegram.sendAudio(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
 
-                return ctx.reply("🚀 **Success!** पोस्ट आपके प्राइवेट चैनल पर **Download Now** बटन के साथ पब्लिश कर दी गई है।", { reply_to_message_id: ctx.message.message_id });
+                return ctx.reply("🚀 **Success!** Post aapke private channel par **Download Now** button ke saath publish kar di gayi hai.", { reply_to_message_id: ctx.message.message_id });
             } catch (err) {
                 console.error(err);
-                return ctx.reply("❌ प्राइवेट चैनल पर पोस्ट भेजने में एरर आया। सुनिश्चित करें कि बॉट चैनल में Admin है।");
+                return ctx.reply("❌ Private channel par post bhejne me error aaya. Check karein bot Admin hai.");
             }
         }
 
-        // --- २. नॉर्मल रिस्पांस लॉजिक (बिना /inline कमांड के सीधे फाइल भेजने पर) ---
+        // --- Normal response logic (Direct upload) ---
         let hasFile = ctx.message.document || ctx.message.video || ctx.message.audio || ctx.message.photo;
         if (hasFile && !currentState) {
             let fileName = "Requested File";
@@ -251,7 +253,7 @@ bot.on('message', async (ctx) => {
 
             fileDb.set(encodedParam, { messageId: ctx.message.message_id, name: fileName });
 
-            // 💾 नॉर्मल फाइल का भी बैकअप लॉग भेजना
+            // 💾 Normal file ka bhi backup log bhejna
             await ctx.telegram.sendMessage(BACKUP_GROUP_ID, `DATABASE_LOG:\nPARAM: ${encodedParam}\nMSG_ID: ${ctx.message.message_id}\nNAME: ${fileName}`);
 
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
@@ -262,7 +264,7 @@ bot.on('message', async (ctx) => {
         }
     }
 
-    // 2. USER CHAT LOGIC (डाउनलोडर पार्ट)
+    // 2. USER CHAT LOGIC (Downloader part)
     if (text.startsWith('/start')) {
         const param = text.split(' ')[1];
         if (!param) return ctx.reply("👋 Welcome! Please click a file link from our channel to download.");
@@ -296,7 +298,8 @@ bot.on('message', async (ctx) => {
                 setTimeout(async () => {
                     try {
                         await ctx.telegram.deleteMessage(ctx.chat.id, forwardedMsg.message_id);
-                        await ctx.telegram.deleteMessage(ctx.chat.id, warningMsg.warningMsg.message_id);
+                        // FIX: warningMsg ka double variable hata diya hai yahan
+                        await ctx.telegram.deleteMessage(ctx.chat.id, warningMsg.message_id);
                     } catch (err) { console.log("Error during auto-deletion:", err.message); }
                 }, 1800000); 
             } catch (err) {
@@ -306,7 +309,7 @@ bot.on('message', async (ctx) => {
     }
 });
 
-// इनलाइन बटन 'Load Next 100 Files' क्लिक हैंडलर
+// Inline button 'Load Next 100 Files' click handler
 bot.action('load_more_backup', async (ctx) => {
     await ctx.answerCbQuery();
     ctx.message = { text: '/restore', chat: { id: BACKUP_GROUP_ID } };
