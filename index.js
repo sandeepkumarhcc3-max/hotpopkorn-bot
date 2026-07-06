@@ -8,7 +8,7 @@ const WEBAPP_URL = 'https://hotpopkornbotwebapp.vercel.app';
 // 📢 Force Join Channels & Links Configuration
 const MAIN_CH_ID = -1003933920647;
 const MAIN_CH_LINK = "https://t.me/popkornmovie_1";
-const BACKUP_CH_ID = -1003900661218; // Yehi aapka pehle PRIVATE_CHANNEL_ID tha
+const BACKUP_CH_ID = -1003900661218; 
 const BACKUP_CH_LINK = "https://t.me/+1A7MUa-fD71jNDk1";
 
 // 📁 Aapki backup group ki ID set hai (Jahan logs pin hote hain)
@@ -44,18 +44,17 @@ async function checkForceJoin(ctx, userId) {
     // Check Backup Channel
     try {
         const member = await ctx.telegram.getChatMember(BACKUP_CH_ID, userId);
-        if (['member', 'administrator', 'creator'].includes(member.status)) {
+        if (member && ['member', 'administrator', 'creator'].includes(member.status)) {
             isSubscribedToBackup = true;
         }
     } catch (err) {
         console.error("Error checking backup channel status:", err.message);
-        // Agar bot admin nahi hai ya channel nahi mila, toh crash na ho isliye safe fallback
     }
 
     // Check Main Channel
     try {
         const member = await ctx.telegram.getChatMember(MAIN_CH_ID, userId);
-        if (['member', 'administrator', 'creator'].includes(member.status)) {
+        if (member && ['member', 'administrator', 'creator'].includes(member.status)) {
             isSubscribedToMain = true;
         }
     } catch (err) {
@@ -308,10 +307,12 @@ bot.on('message', async (ctx) => {
         // --- FORCE JOIN VERIFICATION SYSTEM ---
         const { isSubscribedToBackup, isSubscribedToMain } = await checkForceJoin(ctx, userId);
 
-        // Agar user dono me se kisi ek me bhi nahi hai, toh use access nahi milega
+        // Agar user dono me se kisi ek me bhi nahi hai, toh access deny hoga
         if (!isSubscribedToBackup || !isSubscribedToMain) {
             const buttons = [];
-            let alertText = "⚠️ **ACCESS DENIED!**\n\nFile download karne ke liye aapko humare channels ko join karna hoga. Niche diye gaye buttons se join karein aur phir link par dubara click karein:\n";
+            
+            // 📝 Simple and professional English message for global users
+            let alertText = "⚠️ **Access Denied!**\n\nTo download your requested file, you must join our channels first. Please click the buttons below to join, then try again.";
 
             if (!isSubscribedToBackup) {
                 buttons.push([Markup.button.url('📢 Join Backup Channel', BACKUP_CH_LINK)]);
@@ -320,9 +321,8 @@ bot.on('message', async (ctx) => {
                 buttons.push([Markup.button.url('🍿 Join Main Channel', MAIN_CH_LINK)]);
             }
 
-            // Ek refresh button bhi add kar dete hain convenience ke liye
             const botUsername = ctx.botInfo.username;
-            buttons.push([Markup.button.url('🔄 Check Subscription Again', "https://t.me/" + botUsername + "?start=" + param)]);
+            buttons.push([Markup.button.url('🔄 Try Again / Refresh', "https://t.me/" + botUsername + "?start=" + param)]);
 
             return ctx.reply(alertText, {
                 parse_mode: 'Markdown',
@@ -376,4 +376,4 @@ bot.on('message', async (ctx) => {
     }
 });
 
-bot.launch().then(() => console.log("Hotpopkornbot is now online with Force Join..."));
+bot.launch().then(() => console.log("Hotpopkornbot is online with Fixes..."));
