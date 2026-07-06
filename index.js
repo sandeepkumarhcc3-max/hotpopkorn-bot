@@ -8,6 +8,9 @@ const WEBAPP_URL = 'https://hotpopkornbotwebapp.vercel.app';
 const bot = new Telegraf(BOT_TOKEN);
 const fileDb = new Map();
 
+// Helper function delay dene ke liye
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 // RENDER FREE TIER FIX
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
@@ -25,39 +28,46 @@ bot.on('message', async (ctx) => {
             if (ctx.message.document) fileName = ctx.message.document.file_name;
             else if (ctx.message.video) fileName = ctx.message.video.file_name || "Video File";
 
-            // --- नए फीचर का लॉजिक ---
             let caption = ctx.message.caption || "";
             let watchOnlineUrl = null;
 
+            // Check if user used /link command or just normal link
             const urlRegex = /(https?:\/\/[^\s]+)/gi;
             const match = caption.match(urlRegex);
 
             if (match && match.length > 0) {
                 watchOnlineUrl = match[0];
-                caption = caption.replace(watchOnlineUrl, "").trim();
                 
-                // छोटा सा डिले ताकि टेलीग्राम सर्वर पर फाइल सेट हो जाए, फिर बटन ऐड हो
-                setTimeout(async () => {
-                    try {
-                        await ctx.telegram.editMessageCaption(
-                            ctx.chat.id, 
-                            ctx.message.message_id, 
-                            null, 
-                            caption, 
-                            {
-                                parse_mode: 'Markdown',
-                                ...Markup.inlineKeyboard([
-                                    [Markup.button.url('🍿 Watch Online', watchOnlineUrl)]
-                                ])
-                            }
-                        );
-                    } catch (editError) {
-                        console.log("Error adding inline button:", editError.message);
-                    }
-                }, 200); // 200ms का डिले
-            }
-            // --- नए फीचर का लॉजिक समाप्त ---
+                // Caption se /link command aur actual URL dono ko remove karne ke liye
+                caption = caption.replace(/\/link\s+/gi, ""); // Remove /link command
+                caption = caption.replace(watchOnlineUrl, "").trim(); // Remove URL
+                
+                // File track hone se pehle edit hone ke liye thoda wait karega (800ms)
+                await delay(800); 
 
+                try {
+                    await ctx.telegram.editMessageCaption(
+                        ctx.chat.id, 
+                        ctx.message.message_id, 
+                        null, 
+                        caption, 
+                        {
+                            parse_mode: 'Markdown',
+                            ...Markup.inlineKeyboard([
+                                [Markup.button.url('🍿 Watch Online', watchOnlineUrl)]
+                            ])
+                        }
+                    );
+                    console.log("Successfully edited message with inline button.");
+                } catch (editError) {
+                    console.log("Error adding inline button:", editError.message);
+                }
+                
+                // Edit hone ke baad thoda aur delay taki telegram sync ho jaye
+                await delay(400);
+            }
+
+            // Ab button lagne ke BAAD bot aapko file track karke link dega
             const msgIdStr = ctx.message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
