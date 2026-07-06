@@ -27,7 +27,6 @@ async function saveToBackup(param, msgId, name) {
     try {
         const logText = `DATABASE_LOG:\nPARAM: ${param}\nMSG_ID: ${msgId}\nNAME: ${name}`;
         const sentLog = await bot.telegram.sendMessage(BACKUP_GROUP_ID, logText);
-        // Pinned messages ke jariye telegram bot history ki limitation ko bypass karega
         await bot.telegram.pinChatMessage(BACKUP_GROUP_ID, sentLog.message_id, { disable_notification: true });
     } catch (err) {
         console.error("Backup Save/Pin Error:", err.message);
@@ -45,15 +44,12 @@ bot.on('message', async (ctx) => {
         try {
             await ctx.reply("🔄 **Memory restoration started...** Pinned मैसेजेस से डेटा रिकवर किया जा रहा है।");
             
-            // Telegram bot ko pinned messages nikalne ki full permission hoti hai
             const fullChat = await ctx.telegram.getChat(BACKUP_GROUP_ID);
             
-            // Agar pinned message milta hai
             if (!fullChat.pinned_message) {
                 return ctx.reply("🏁 **Restore Complete!** ग्रुप में कोई भी पिन किया हुआ लॉग मेसेज नहीं मिला।");
             }
 
-            // Pinned message ko as a starting point use karke restore karna
             let restoredCount = 0;
             const logText = fullChat.pinned_message.text || '';
 
@@ -261,11 +257,14 @@ bot.on('message', async (ctx) => {
 
         if (!param.startsWith('getfile_')) {
             const fileData = fileDb.get(param);
-            const fileName = fileData ? fileData.name : "Your Requested File";
+            
+            // ⏱️ UPDATE: Title ko fetch karne ke liye database se sahi naam nikala gaya hai
+            const actualFileName = fileData ? fileData.name : "Unknown File";
             const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
 
-            await ctx.reply(
-                `📂 **File Name:** \`${fileName}\`\n\n👇 Click the button below to open the secure downloader and unlock your file.`,
+            // ⏱️ UPDATE: Message format ko aapki query ke anusaar badal diya hai
+            const webAppMsg = await ctx.reply(
+                `✨ **Your Requested File**\n\n📂 **File Name:** \`${actualFileName}\`\n\n👇 Click the button below to open the secure downloader and unlock your file.`,
                 {
                     parse_mode: 'Markdown',
                     ...Markup.inlineKeyboard([
@@ -273,6 +272,14 @@ bot.on('message', async (ctx) => {
                     ])
                 }
             );
+
+            // ⏱️ 2 minute baad button waala message delete karne ka automated logic
+            setTimeout(async () => {
+                try {
+                    await ctx.telegram.deleteMessage(ctx.chat.id, webAppMsg.message_id);
+                    console.log("WebApp URL message deleted automatically after 2 minutes.");
+                } catch (err) { console.log("Error during WebApp message auto-deletion:", err.message); }
+            }, 120000);
         } 
         else if (param.startsWith('getfile_')) {
             const cleanParam = param.replace('getfile_', '');
