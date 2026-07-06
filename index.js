@@ -8,8 +8,8 @@ const WEBAPP_URL = 'https://hotpopkornbotwebapp.vercel.app';
 const bot = new Telegraf(BOT_TOKEN);
 const fileDb = new Map();
 
-// Helper function delay dene ke liye
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+// यूज़र्स के स्टेट्स (कदम) याद रखने के लिए मेमोरी
+const userStates = new Map();
 
 // RENDER FREE TIER FIX
 const PORT = process.env.PORT || 3000;
@@ -21,53 +21,132 @@ http.createServer((req, res) => {
 // 1. DATABASE GROUP LOGIC
 bot.on('message', async (ctx) => {
     if (ctx.chat.id === DATABASE_GROUP_ID) {
+        const text = ctx.message.text || '';
+        const userId = ctx.from.id;
+        const currentState = userStates.get(userId);
+
+        // --- कस्टमाइज्ड /inline कमांड लॉजिक ---
+        if (text.startsWith('/inline')) {
+            userStates.set(userId, { step: 'AWAITING_FILE' });
+            return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...", {
+                reply_to_message_id: ctx.message.message_id,
+                parse_mode: 'Markdown'
+            });
+        }
+
+        // स्टेप 2: फाइल रिसीव करना (जब /inline मोड एक्टिव हो)
+        if (currentState && currentState.step === 'AWAITING_FILE') {
+            let hasFile = ctx.message.document || ctx.message.video || ctx.message.audio || ctx.message.photo;
+            if (!hasFile) {
+                return ctx.reply("❌ That's not a file. Please send an image, video, or document.");
+            }
+
+            // फाइल का नाम और टाइप निकालें
+            let fileName = "Requested File";
+            let fileType = "";
+            let fileId = "";
+
+            if (ctx.message.document) {
+                fileName = ctx.message.document.file_name;
+                fileId = ctx.message.document.file_id;
+                fileType = "document";
+            } else if (ctx.message.video) {
+                fileName = ctx.message.video.file_name || "Video File";
+                fileId = ctx.message.video.file_id;
+                fileType = "video";
+            } else if (ctx.message.audio) {
+                fileName = ctx.message.audio.file_name || "Audio File";
+                fileId = ctx.message.audio.file_id;
+                fileType = "audio";
+            } else if (ctx.message.photo) {
+                fileName = "Photo File";
+                // फोटो एरे में से सबसे बड़ी साइज वाली फोटो लेते हैं
+                fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+                fileType = "photo";
+            }
+
+            // अगला स्टेप सेट करें और डेटा सेव करें
+            userStates.set(userId, {
+                step: 'AWAITING_LINK',
+                fileId: fileId,
+                fileType: fileType,
+                fileName: fileName,
+                caption: ctx.message.caption || ""
+            });
+
+            return ctx.reply("🔗 **Send Link:** Now, please send the URL/Link for the button...", {
+                reply_to_message_id: ctx.message.message_id,
+                parse_mode: 'Markdown'
+            });
+        }
+
+        // स्टेप 3: लिंक रिसीv करना और कंबाइन करके पोस्ट बनाना
+        if (currentState && currentState.step === 'AWAITING_LINK') {
+            const urlRegex = /(https?:\/\/[^\s]+)/gi;
+            const match = text.match(urlRegex);
+
+            if (!match) {
+                return ctx.reply("❌ Invalid Link! Please send a proper URL starting with http:// or https://");
+            }
+
+            const watchOnlineUrl = match[0];
+            const fileData = currentState;
+
+            // स्टेट डिलीट करें ताकि प्रोसेस रीसेट हो जाए
+            userStates.delete(userId);
+
+            try {
+                let finalPost;
+                const extraOptions = {
+                    caption: fileData.caption,
+                    parse_mode: 'Markdown',
+                    ...Markup.inlineKeyboard([
+                        [Markup.button.url('🍿 Watch Online', watchOnlineUrl)]
+                    ])
+                };
+
+                // कंबाइंड पोस्ट ग्रुप में भेजना
+                if (fileData.fileType === 'photo') {
+                    finalPost = await ctx.telegram.sendPhoto(ctx.chat.id, fileData.fileId, extraOptions);
+                } else if (fileData.fileType === 'video') {
+                    finalPost = await ctx.telegram.sendVideo(ctx.chat.id, fileData.fileId, extraOptions);
+                } else if (fileData.fileType === 'document') {
+                    finalPost = await ctx.telegram.sendDocument(ctx.chat.id, fileData.fileId, extraOptions);
+                } else if (fileData.fileType === 'audio') {
+                    finalPost = await ctx.telegram.sendAudio(ctx.chat.id, fileData.fileId, extraOptions);
+                }
+
+                // पुराने लॉजिक के अनुसार फाइल को डेटाबेस में ट्रैक करना
+                const msgIdStr = finalPost.message_id.toString();
+                const encodedParam = Buffer.from(msgIdStr).toString('base64url');
+
+                fileDb.set(encodedParam, {
+                    messageId: finalPost.message_id,
+                    name: fileData.fileName
+                });
+
+                const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
+
+                return ctx.reply(`✅ **Inline Post Created & Tracked Successfully!**\n\n📂 **Name:** ${fileData.fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
+                    reply_to_message_id: finalPost.message_id,
+                    parse_mode: 'Markdown'
+                });
+
+            } catch (err) {
+                console.error("Error creating combined post:", err);
+                return ctx.reply("❌ Error compiling the inline post. Check bot permissions.");
+            }
+        }
+
+
+        // --- २. नॉर्मल रिस्पांस लॉजिक (बिना /inline कमांड के) ---
         let hasFile = ctx.message.document || ctx.message.video || ctx.message.audio || ctx.message.photo;
         
-        if (hasFile) {
+        if (hasFile && !currentState) {
             let fileName = "Requested File";
             if (ctx.message.document) fileName = ctx.message.document.file_name;
             else if (ctx.message.video) fileName = ctx.message.video.file_name || "Video File";
 
-            let caption = ctx.message.caption || "";
-            let watchOnlineUrl = null;
-
-            // Check if user used /link command or just normal link
-            const urlRegex = /(https?:\/\/[^\s]+)/gi;
-            const match = caption.match(urlRegex);
-
-            if (match && match.length > 0) {
-                watchOnlineUrl = match[0];
-                
-                // Caption se /link command aur actual URL dono ko remove karne ke liye
-                caption = caption.replace(/\/link\s+/gi, ""); // Remove /link command
-                caption = caption.replace(watchOnlineUrl, "").trim(); // Remove URL
-                
-                // File track hone se pehle edit hone ke liye thoda wait karega (800ms)
-                await delay(800); 
-
-                try {
-                    await ctx.telegram.editMessageCaption(
-                        ctx.chat.id, 
-                        ctx.message.message_id, 
-                        null, 
-                        caption, 
-                        {
-                            parse_mode: 'Markdown',
-                            ...Markup.inlineKeyboard([
-                                [Markup.button.url('🍿 Watch Online', watchOnlineUrl)]
-                            ])
-                        }
-                    );
-                    console.log("Successfully edited message with inline button.");
-                } catch (editError) {
-                    console.log("Error adding inline button:", editError.message);
-                }
-                
-                // Edit hone ke baad thoda aur delay taki telegram sync ho jaye
-                await delay(400);
-            }
-
-            // Ab button lagne ke BAAD bot aapko file track karke link dega
             const msgIdStr = ctx.message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
@@ -86,7 +165,7 @@ bot.on('message', async (ctx) => {
         return;
     }
 
-    // 2. USER CHAT LOGIC
+    // 2. USER CHAT LOGIC (यह हिस्सा बिल्कुल पुराना और अनछुआ है)
     const text = ctx.message.text || '';
     if (text.startsWith('/start')) {
         const param = text.split(' ')[1];
@@ -147,3 +226,4 @@ bot.on('message', async (ctx) => {
 });
 
 bot.launch().then(() => console.log("Hotpopkornbot is now online..."));
+                
