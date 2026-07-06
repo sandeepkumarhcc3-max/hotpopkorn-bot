@@ -39,36 +39,69 @@ bot.on('message', async (ctx) => {
     const userId = ctx.from.id;
     const currentState = userStates.get(userId);
 
-    // --- Pinned Messages se Memory Restore karne ka logic ---
+    // --- Pinned Messages/Logs se Memory Restore karne ka Fix Logic ---
     if (ctx.chat.id === BACKUP_GROUP_ID && text.startsWith('/restore')) {
         try {
-            await ctx.reply("🔄 **Memory restoration started...** Pinned मैसेजेस से डेटा रिकवर किया जा रहा है।");
-            
+            // Pehle aakhiri pinned message ki ID nikaalte hain taaki wahan se piche scan kar sakein
             const fullChat = await ctx.telegram.getChat(BACKUP_GROUP_ID);
-            
             if (!fullChat.pinned_message) {
-                return ctx.reply("🏁 **Restore Complete!** ग्रुप में कोई भी पिन किया हुआ लॉग मेसेज नहीं मिला।");
+                return ctx.reply("🏁 **Restore Cancelled!** Is group me koi bhi pinned message nahi mila.");
             }
 
+            const statusMsg = await ctx.reply("🔄 **Memory restoration started...** Scanning backup messages line by line, please wait...");
+            
+            const latestPinId = fullChat.pinned_message.message_id;
             let restoredCount = 0;
-            const logText = fullChat.pinned_message.text || '';
+            
+            // Loop chala kar pichle 10,000 messages ko scan karenge (Aap is range ko badha bhi sakte hain)
+            const scanRange = 10000; 
+            const startId = latestPinId;
+            const endId = Math.max(1, latestPinId - scanRange);
 
-            if (logText.includes('DATABASE_LOG:')) {
-                const paramMatch = logText.match(/PARAM:\s*([^\s|]+)/);
-                const msgIdMatch = logText.match(/MSG_ID:\s*(\d+)/);
-                const nameMatch = logText.match(/NAME:\s*(.+)$/m);
+            for (let currentId = startId; currentId >= endId; currentId--) {
+                try {
+                    // Ek-ek karke message ko target group me forward karke metadata fetch karne ki trick
+                    const msg = await ctx.telegram.forwardMessage(DATABASE_GROUP_ID, BACKUP_GROUP_ID, currentId).catch(() => null);
+                    
+                    if (msg) {
+                        // Forward karne ke baad use turant delete kar denge taaki database group ganda na ho
+                        await ctx.telegram.deleteMessage(DATABASE_GROUP_ID, msg.message_id).catch(() => null);
+                        
+                        const msgText = msg.text || '';
+                        if (msgText.includes('DATABASE_LOG:')) {
+                            const paramMatch = msgText.match(/PARAM:\s*([^\s|]+)/);
+                            const msgIdMatch = msgText.match(/MSG_ID:\s*(\d+)/);
+                            const nameMatch = msgText.match(/NAME:\s*(.+)$/m);
 
-                if (paramMatch && msgIdMatch && nameMatch) {
-                    fileDb.set(paramMatch[1], { messageId: parseInt(msgIdMatch[1]), name: nameMatch[1].trim() });
-                    restoredCount++;
+                            if (paramMatch && msgIdMatch && nameMatch) {
+                                const key = paramMatch[1].trim();
+                                // Agar pehle se added nahi hai toh add karo
+                                if (!fileDb.has(key)) {
+                                    fileDb.set(key, { 
+                                        messageId: parseInt(msgIdMatch[1]), 
+                                        name: nameMatch[1].trim() 
+                                    });
+                                    restoredCount++;
+                                }
+                            }
+                        }
+                    }
+                } catch (singleErr) {
+                    // Agar koi ek message content private ya deleted ho toh skip karo
+                    continue;
                 }
             }
 
-            return ctx.reply(`📊 **Restoration Complete!** Pinned डेटा से **${restoredCount}** मुख्य लिंक सफलताली रीलोड कर ली गई है।\n\nTotal Active Links: **${fileDb.size}**`);
+            // Status message ko update karo final report ke sath
+            try {
+                await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
+            } catch (e) {}
+
+            return ctx.reply(`📊 **Restoration Complete!**\n\n✅ New Restored Links: **${restoredCount}**\n📚 Total Active Links in Memory: **${fileDb.size}**`);
 
         } catch (restoreErr) {
             console.error("Restore Error:", restoreErr);
-            return ctx.reply(`❌ **Restore करने में समस्या आई।**\n\n**Technical Error:** \`${restoreErr.message}\``);
+            return ctx.reply(`❌ **Restore karne me samasya aayi.**\n\n**Technical Error:** \`${restoreErr.message}\``);
         }
     }
 
@@ -259,7 +292,6 @@ bot.on('message', async (ctx) => {
             const fileData = fileDb.get(param);
             const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
 
-            // ✨ UPDATE: File name completely hata diya hai aur text ko ekdum clean, professional aur high-CTR attractive bana diya hai.
             const webAppMsg = await ctx.reply(
                 `✨ **YOUR REQUESTED FILE IS READY!**\n\n🔒 *Your secure download link has been generated successfully. Click the button below to open the downloader and unlock your file.*\n\n👇  👇  👇`,
                 {
@@ -270,7 +302,6 @@ bot.on('message', async (ctx) => {
                 }
             );
 
-            // ⏱️ 2 minute baad button waala message delete karne ka automated logic
             setTimeout(async () => {
                 try {
                     await ctx.telegram.deleteMessage(ctx.chat.id, webAppMsg.message_id);
@@ -287,7 +318,7 @@ bot.on('message', async (ctx) => {
             try {
                 await ctx.reply("🚀 Processing your secure link... Sending file...");
                 const forwardedMsg = await ctx.telegram.forwardMessage(ctx.chat.id, DATABASE_GROUP_ID, fileData.messageId);
-                const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies.Please forward this to a chat or save the message.", { parse_mode: 'Markdown' });
+                const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies.", { parse_mode: 'Markdown' });
 
                 setTimeout(async () => {
                     try {
