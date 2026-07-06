@@ -287,7 +287,7 @@ bot.on('message', async (ctx) => {
             try {
                 await ctx.reply("🚀 Processing your secure link... Sending file...");
                 const forwardedMsg = await ctx.telegram.forwardMessage(ctx.chat.id, DATABASE_GROUP_ID, fileData.messageId);
-                const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies.", { parse_mode: 'Markdown' });
+                const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies.Please forward this to a chat or save the message.", { parse_mode: 'Markdown' });
 
                 setTimeout(async () => {
                     try {
