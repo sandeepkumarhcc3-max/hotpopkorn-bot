@@ -253,23 +253,23 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     // Main database group ka logic
     if (chatId === DATABASE_GROUP_ID) {
 
-        // ⚡ EXTRACT ANY MEDIA AT ANY COST SYSTEM
-        let currentFileObj = message.video || message.document || message.audio || (message.photo ? message.photo[message.photo.length - 1] : null);
+        // ⚡ ALL-INCLUSIVE MEDIA EXTRACTION (Added message.animation & message.video_note)
+        let currentFileObj = message.video || message.document || message.audio || message.animation || message.video_note || (message.photo ? message.photo[message.photo.length - 1] : null);
         
-        // ⚡ NEW: Dedicated /video state logic
+        // ⚡ Dedicated /video state logic
         if (currentState && currentState.step === 'AWAITING_DIRECT_VIDEO') {
             if (!currentFileObj) {
                 return ctx.reply("❌ No media detected. Please send a valid Video or Document file.");
             }
             
-            let fileName = currentFileObj.file_name || (message.video ? "Video File" : "Media File");
+            let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.animation ? "Animation/Silent Video" : "Media File");
             const msgIdStr = message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
             await saveToBackup(encodedParam, message.message_id, fileName);
 
-            if (userId) userStates.delete(userId); // Clear state
+            if (userId) userStates.delete(userId); 
 
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **Video Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
@@ -284,7 +284,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             let fileName = currentFileObj.file_name || "Requested File";
             let fileId = currentFileObj.file_id;
-            let fileType = message.document ? "document" : message.video ? "video" : message.audio ? "audio" : "photo";
+            let fileType = message.document ? "document" : message.video ? "video" : message.audio ? "audio" : message.animation ? "animation" : "photo";
 
             if (userId) {
                 userStates.set(userId, { step: 'AWAITING_LINK', fileId, fileType, fileName, caption: message.caption || "" });
@@ -309,6 +309,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 else if (fileData.fileType === 'video') finalPost = await ctx.telegram.sendVideo(chatId, fileData.fileId, extraOptions);
                 else if (fileData.fileType === 'document') finalPost = await ctx.telegram.sendDocument(chatId, fileData.fileId, extraOptions);
                 else if (fileData.fileType === 'audio') finalPost = await ctx.telegram.sendAudio(chatId, fileData.fileId, extraOptions);
+                else if (fileData.fileType === 'animation') finalPost = await ctx.telegram.sendAnimation(chatId, fileData.fileId, extraOptions);
 
                 const msgIdStr = finalPost.message_id.toString();
                 const encodedParam = Buffer.from(msgIdStr).toString('base64url');
@@ -338,6 +339,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 else if (fileData.fileType === 'video') await ctx.telegram.sendVideo(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
                 else if (fileData.fileType === 'document') await ctx.telegram.sendDocument(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
                 else if (fileData.fileType === 'audio') await ctx.telegram.sendAudio(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
+                else if (fileData.fileType === 'animation') await ctx.telegram.sendAnimation(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
 
                 return ctx.reply("🚀 **Success!** Post aapke private channel par publish kar di gayi hai.", { reply_to_message_id: message.message_id });
             } catch (err) {
@@ -345,9 +347,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             }
         }
 
-        // --- Normal response fallback (Direct upload for ANY type) ---
+        // --- Normal response fallback (Direct upload for ANY type including Animation) ---
         if (currentFileObj && !currentState) {
-            let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.photo ? "Photo File" : "Media File");
+            let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.animation ? "Silent Video" : message.photo ? "Photo File" : "Media File");
 
             const msgIdStr = message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
