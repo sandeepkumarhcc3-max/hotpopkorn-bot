@@ -20,7 +20,10 @@ const MAIN_CH_LINK = "https://t.me/popkornmovie_1";
 const BACKUP_CH_ID = "-1003900661218";
 const BACKUP_CH_LINK = "https://t.me/+1A7MUa-fD71jNDk1";
 
-const bot = new Telegraf(BOT_TOKEN);
+// Handler timeout badha diya taaki Render server freeze na ho
+const bot = new Telegraf(BOT_TOKEN, {
+    handlerTimeout: 900000 
+});
 const fileDb = new Map();
 const userStates = new Map();
 
@@ -135,7 +138,6 @@ async function deliverFile(ctx, param) {
         setTimeout(async () => {
             try {
                 await ctx.telegram.deleteMessage(ctx.chat.id, webAppMsg.message_id);
-                console.log("WebApp URL message deleted automatically after 2 minutes.");
             } catch (err) { console.log("Error during WebApp message auto-deletion:", err.message); }
         }, 120000);
     }
@@ -188,7 +190,6 @@ bot.command('forward', (ctx) => {
     }
 });
 
-// 🎬 Dedicated /video command
 bot.command('video', (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
@@ -253,7 +254,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     // Main database group ka logic
     if (chatId === DATABASE_GROUP_ID) {
 
-        // ⚡ ALL-INCLUSIVE MEDIA EXTRACTION (Added message.animation & message.video_note)
         let currentFileObj = message.video || message.document || message.audio || message.animation || message.video_note || (message.photo ? message.photo[message.photo.length - 1] : null);
         
         // ⚡ Dedicated /video state logic
@@ -262,12 +262,15 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 return ctx.reply("❌ No media detected. Please send a valid Video or Document file.");
             }
             
-            let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.animation ? "Animation/Silent Video" : "Media File");
+            let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.animation ? "Silent Video" : "Media File");
             const msgIdStr = message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
-            await saveToBackup(encodedParam, message.message_id, fileName);
+            
+            process.nextTick(async () => {
+                await saveToBackup(encodedParam, message.message_id, fileName);
+            });
 
             if (userId) userStates.delete(userId); 
 
@@ -315,7 +318,10 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
                 fileDb.set(encodedParam, { messageId: finalPost.message_id, name: fileData.fileName });
-                await saveToBackup(encodedParam, finalPost.message_id, fileData.fileName);
+                
+                process.nextTick(async () => {
+                    await saveToBackup(encodedParam, finalPost.message_id, fileData.fileName);
+                });
 
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                 if (userId) userStates.set(userId, { step: 'COMPLETED', fileId: fileData.fileId, fileType: fileData.fileType, lastTrackedLink: botLink });
@@ -347,7 +353,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             }
         }
 
-        // --- Normal response fallback (Direct upload for ANY type including Animation) ---
+        // --- Normal response fallback (Direct upload for 1GB+ files handler) ---
         if (currentFileObj && !currentState) {
             let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.animation ? "Silent Video" : message.photo ? "Photo File" : "Media File");
 
@@ -355,7 +361,10 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
-            await saveToBackup(encodedParam, message.message_id, fileName);
+            
+            process.nextTick(async () => {
+                await saveToBackup(encodedParam, message.message_id, fileName);
+            });
 
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **File Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
@@ -377,4 +386,4 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     }
 });
 
-bot.launch().then(() => console.log("Hotpopkornbot is now online..."));
+// ⚡ OVERRIDE POLLING OPTIMIZATION FOR RENDER FREE INSTANCE
