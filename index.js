@@ -188,7 +188,7 @@ bot.command('forward', (ctx) => {
     }
 });
 
-// 🎬 NEW: Dedicated /video command for direct tracking without conflict
+// 🎬 Dedicated /video command
 bot.command('video', (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
@@ -253,15 +253,16 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     // Main database group ka logic
     if (chatId === DATABASE_GROUP_ID) {
 
-        // ⚡ NEW: Dedicated /video state logic (Directly catches the video file)
+        // ⚡ EXTRACT ANY MEDIA AT ANY COST SYSTEM
+        let currentFileObj = message.video || message.document || message.audio || (message.photo ? message.photo[message.photo.length - 1] : null);
+        
+        // ⚡ NEW: Dedicated /video state logic
         if (currentState && currentState.step === 'AWAITING_DIRECT_VIDEO') {
-            if (!message.video && !message.document) {
-                return ctx.reply("❌ That is not a video file. Please send a proper Video or Document file.");
+            if (!currentFileObj) {
+                return ctx.reply("❌ No media detected. Please send a valid Video or Document file.");
             }
-            let fileName = "Video File";
-            if (message.video) fileName = message.video.file_name || "Video File";
-            else if (message.document) fileName = message.document.file_name;
-
+            
+            let fileName = currentFileObj.file_name || (message.video ? "Video File" : "Media File");
             const msgIdStr = message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
@@ -279,14 +280,11 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
         // Step 2: File receive karna (/inline loop ke liye)
         if (currentState && currentState.step === 'AWAITING_FILE') {
-            let hasFile = message.document || message.video || message.audio || message.photo;
-            if (!hasFile) return ctx.reply("❌ That's not a file. Please send an image, video, or document.");
+            if (!currentFileObj) return ctx.reply("❌ That's not a valid file. Please send any file/image/video.");
 
-            let fileName = "Requested File", fileType = "", fileId = "";
-            if (message.document) { fileName = message.document.file_name; fileId = message.document.file_id; fileType = "document"; }
-            else if (message.video) { fileName = message.video.file_name || "Video File"; fileId = message.video.file_id; fileType = "video"; }
-            else if (message.audio) { fileName = message.audio.file_name || "Audio File"; fileId = message.audio.file_id; fileType = "audio"; }
-            else if (message.photo) { fileName = "Photo File"; fileId = message.photo[message.photo.length - 1].file_id; fileType = "photo"; }
+            let fileName = currentFileObj.file_name || "Requested File";
+            let fileId = currentFileObj.file_id;
+            let fileType = message.document ? "document" : message.video ? "video" : message.audio ? "audio" : "photo";
 
             if (userId) {
                 userStates.set(userId, { step: 'AWAITING_LINK', fileId, fileType, fileName, caption: message.caption || "" });
@@ -347,14 +345,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             }
         }
 
-        // --- Normal response fallback (Direct upload) ---
-        let isDirectFile = message.document || message.video || message.audio || message.photo;
-        if (isDirectFile && !currentState) {
-            let fileName = "Requested File";
-            if (message.document) fileName = message.document.file_name;
-            else if (message.video) fileName = message.video.file_name || "Video File";
-            else if (message.audio) fileName = message.audio.file_name || "Audio File";
-            else if (message.photo) fileName = "Photo File";
+        // --- Normal response fallback (Direct upload for ANY type) ---
+        if (currentFileObj && !currentState) {
+            let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.photo ? "Photo File" : "Media File");
 
             const msgIdStr = message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
