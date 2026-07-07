@@ -169,11 +169,23 @@ bot.command('status', (ctx) => {
     return ctx.reply("🟢 **Bot is alive and running smoothly!**", { parse_mode: 'Markdown' });
 });
 
+bot.command('cancel', (ctx) => {
+    const userId = ctx.from.id;
+    if (ctx.chat.id === DATABASE_GROUP_ID) {
+        if (userStates.has(userId)) {
+            userStates.delete(userId);
+            return ctx.reply("❌ **Process Cancelled!** Aapka current operation cancel kar diya gaya hai.", { parse_mode: 'Markdown' });
+        } else {
+            return ctx.reply("ℹ️ **No active process found to cancel.**", { parse_mode: 'Markdown' });
+        }
+    }
+});
+
 bot.command('inline', (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
         userStates.set(userId, { step: 'AWAITING_FILE' });
-        return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...", { parse_mode: 'Markdown' });
+        return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...\n\n_Tip: Kisi bhi waqt cancel karne ke liye /cancel type karein._", { parse_mode: 'Markdown' });
     }
 });
 
@@ -195,7 +207,7 @@ bot.command('video', (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
         userStates.set(userId, { step: 'AWAITING_DIRECT_VIDEO' });
-        return ctx.reply("🚀 **Send Video:** Please send or forward your video file now, and I will generate the link instantly!", { parse_mode: 'Markdown' });
+        return ctx.reply("🚀 **Send Video:** Please send or forward your video file now, and I will generate the link instantly!\n\n_Tip: Kisi bhi waqt cancel karne ke liye /cancel type karein._", { parse_mode: 'Markdown' });
     }
 });
 
@@ -209,6 +221,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     const userId = message.from ? message.from.id : null;
     const currentState = userId ? userStates.get(userId) : null;
     const chatId = ctx.chat.id;
+
+    // Ignore if it's a command handled elsewhere
+    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status')) return;
 
     // --- Pinned Messages/Logs se Memory Restore karne ka Logic ---
     if (chatId === BACKUP_GROUP_ID && text.startsWith('/restore')) {
@@ -309,7 +324,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             try {
                 let finalPost;
-                const extraOptions = { caption: fileData.caption, parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.url('🍿 Watch Online', watchOnlineUrl)]]) };
+                const extraOptions = { caption: fileData.caption, parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.url('🍿 Download/Watch online', watchOnlineUrl)]]) };
 
                 if (fileData.fileType === 'photo') finalPost = await ctx.telegram.sendPhoto(chatId, fileData.fileId, extraOptions);
                 else if (fileData.fileType === 'video') finalPost = await ctx.telegram.sendVideo(chatId, fileData.fileId, extraOptions);
@@ -391,4 +406,3 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 });
 
 bot.launch().then(() => console.log("Hotpopkornbot is now online..."));
-
