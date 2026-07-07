@@ -391,3 +391,4 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 });
 
 bot.launch().then(() => console.log("Hotpopkornbot is now online..."));
+
