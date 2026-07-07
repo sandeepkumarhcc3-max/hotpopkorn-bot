@@ -5,10 +5,10 @@ const BOT_TOKEN = '8869980874:AAE_MTb64po36ocmbLFdMtxwCPHT4a9UZ7g';
 const DATABASE_GROUP_ID = -1003927356068; 
 const WEBAPP_URL = 'https://hotpopkornbotwebapp.vercel.app'; 
 
-// 📢 Aapki private channel ki ID set hai
+// 📢 Private channel ID
 const PRIVATE_CHANNEL_ID = -1003900661218; 
 
-// 📁 Aapki backup group ki ID set hai
+// 📁 Backup group ID
 const BACKUP_GROUP_ID = -1004314246888; 
 
 // 👑 ADMIN BYPASS SYSTEM
@@ -24,11 +24,11 @@ const bot = new Telegraf(BOT_TOKEN);
 const fileDb = new Map();
 const userStates = new Map();
 
-// RENDER FREE TIER FIX
-const PORT = process.env.PORT || 3000;
+// 🚀 ALIVE & PORT FIX (Defaulted to 7860 for Hugging Face Spaces / Render compatibility)
+const PORT = process.env.PORT || 7860;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bot is running safely!');
+    res.end('Bot is running safely and alive!');
 }).listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 
 // Helper function: Backup group me log bhejkar use pin karne ke liye
@@ -42,9 +42,8 @@ async function saveToBackup(param, msgId, name) {
     }
 }
 
-// 🔒 Force-Join check: returns which channels the user still needs to join
+// 🔒 Force-Join check
 async function checkForceJoin(ctx, userId) {
-    // 👑 Admin bypass
     if (ADMIN_IDS.includes(userId)) {
         return { isSubscribedToBackup: true, isSubscribedToMain: true };
     }
@@ -70,8 +69,7 @@ async function checkForceJoin(ctx, userId) {
     return { isSubscribedToBackup, isSubscribedToMain };
 }
 
-// 🔒 Sends the correct "please join" message depending on what's missing.
-// Returns true if user is fully verified (both joined), false if a join message was sent.
+// 🔒 Enforce Join
 async function enforceJoinOrPrompt(ctx, userId, param) {
     const { isSubscribedToBackup, isSubscribedToMain } = await checkForceJoin(ctx, userId);
 
@@ -107,7 +105,6 @@ bot.action(/check_join_(.+)/, async (ctx) => {
 
     const verified = await enforceJoinOrPrompt(ctx, userId, param);
     if (!verified) {
-        // Still missing a channel — enforceJoinOrPrompt already sent the next prompt.
         await ctx.answerCbQuery("You still need to join a channel.");
         return;
     }
@@ -117,11 +114,10 @@ bot.action(/check_join_(.+)/, async (ctx) => {
         await ctx.deleteMessage();
     } catch (e) {}
 
-    // Same delivery logic as the /start handler, reused here after verification.
     await deliverFile(ctx, param);
 });
 
-// 📦 Extracted file-delivery logic so both /start and the recheck button can use it
+// 📦 File delivery logic
 async function deliverFile(ctx, param) {
     if (!param.startsWith('getfile_')) {
         const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
@@ -152,7 +148,7 @@ async function deliverFile(ctx, param) {
         try {
             await ctx.reply("🚀 Processing your secure link... Sending file...");
             const forwardedMsg = await ctx.telegram.forwardMessage(ctx.chat.id, DATABASE_GROUP_ID, fileData.messageId);
-            const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies.Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
+            const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies. Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
 
             setTimeout(async () => {
                 try {
@@ -166,16 +162,23 @@ async function deliverFile(ctx, param) {
     }
 }
 
-// 1. DATABASE GROUP & BACKUP RESTORE LOGIC
-bot.on('message', async (ctx) => {
-    const text = ctx.message.text || '';
-    const userId = ctx.from.id;
-    const currentState = userStates.get(userId);
+// 1. DATABASE GROUP & BACKUP RESTORE LOGIC (Fixed to accept all message types)
+bot.on(['message', 'channel_post'], async (ctx) => {
+    const text = ctx.message.text || ctx.message.caption || '';
+    const userId = ctx.from ? ctx.from.id : null;
+    const currentState = userId ? userStates.get(userId) : null;
+
+    // ✨ STATUS COMMAND: Check karne ke liye ki bot alive hai ya nahi
+    if (text.startsWith('/status')) {
+        return ctx.reply("🟢 **Bot is alive and running smoothly!**", {
+            reply_to_message_id: ctx.message.message_id,
+            parse_mode: 'Markdown'
+        });
+    }
 
     // --- Pinned Messages/Logs se Memory Restore karne ka Fix Logic ---
     if (ctx.chat.id === BACKUP_GROUP_ID && text.startsWith('/restore')) {
         try {
-            // Pehle aakhiri pinned message ki ID nikaalte hain taaki wahan se piche scan kar sakein
             const fullChat = await ctx.telegram.getChat(BACKUP_GROUP_ID);
             if (!fullChat.pinned_message) {
                 return ctx.reply("🏁 **Restore Cancelled!** Is group me koi bhi pinned message nahi mila.");
@@ -185,22 +188,18 @@ bot.on('message', async (ctx) => {
             
             const latestPinId = fullChat.pinned_message.message_id;
             let restoredCount = 0;
-            
-            // Loop chala kar pichle 10,000 messages ko scan karenge (Aap is range ko badha bhi sakte hain)
             const scanRange = 10000; 
             const startId = latestPinId;
             const endId = Math.max(1, latestPinId - scanRange);
 
             for (let currentId = startId; currentId >= endId; currentId--) {
                 try {
-                    // Ek-ek karke message ko target group me forward karke metadata fetch karne ki trick
                     const msg = await ctx.telegram.forwardMessage(DATABASE_GROUP_ID, BACKUP_GROUP_ID, currentId).catch(() => null);
                     
                     if (msg) {
-                        // Forward karne ke baad use turant delete kar denge taaki database group ganda na ho
                         await ctx.telegram.deleteMessage(DATABASE_GROUP_ID, msg.message_id).catch(() => null);
                         
-                        const msgText = msg.text || '';
+                        const msgText = msg.text || msg.caption || '';
                         if (msgText.includes('DATABASE_LOG:')) {
                             const paramMatch = msgText.match(/PARAM:\s*([^\s|]+)/);
                             const msgIdMatch = msgText.match(/MSG_ID:\s*(\d+)/);
@@ -208,7 +207,6 @@ bot.on('message', async (ctx) => {
 
                             if (paramMatch && msgIdMatch && nameMatch) {
                                 const key = paramMatch[1].trim();
-                                // Agar pehle se added nahi hai toh add karo
                                 if (!fileDb.has(key)) {
                                     fileDb.set(key, { 
                                         messageId: parseInt(msgIdMatch[1]), 
@@ -220,12 +218,10 @@ bot.on('message', async (ctx) => {
                         }
                     }
                 } catch (singleErr) {
-                    // Agar koi ek message content private ya deleted ho toh skip karo
                     continue;
                 }
             }
 
-            // Status message ko update karo final report ke sath
             try {
                 await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
             } catch (e) {}
@@ -243,7 +239,7 @@ bot.on('message', async (ctx) => {
 
         // --- Customized /inline command logic ---
         if (text.startsWith('/inline')) {
-            userStates.set(userId, { step: 'AWAITING_FILE' });
+            if (userId) userStates.set(userId, { step: 'AWAITING_FILE' });
             return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...", {
                 reply_to_message_id: ctx.message.message_id,
                 parse_mode: 'Markdown'
@@ -260,7 +256,7 @@ bot.on('message', async (ctx) => {
             }
 
             currentState.step = 'AWAITING_TITLE';
-            userStates.set(userId, currentState);
+            if (userId) userStates.set(userId, currentState);
 
             return ctx.reply("✏️ **Title your post name:** Please send the text/title for your channel post now...", {
                 reply_to_message_id: ctx.message.message_id,
@@ -297,13 +293,15 @@ bot.on('message', async (ctx) => {
                 fileType = "photo";
             }
 
-            userStates.set(userId, {
-                step: 'AWAITING_LINK',
-                fileId: fileId,
-                fileType: fileType,
-                fileName: fileName,
-                caption: ctx.message.caption || ""
-            });
+            if (userId) {
+                userStates.set(userId, {
+                    step: 'AWAITING_LINK',
+                    fileId: fileId,
+                    fileType: fileType,
+                    fileName: fileName,
+                    caption: ctx.message.caption || ""
+                });
+            }
 
             return ctx.reply("🔗 **Send Link:** Now, please send the URL/Link for the button...", {
                 reply_to_message_id: ctx.message.message_id,
@@ -343,17 +341,18 @@ bot.on('message', async (ctx) => {
 
                 fileDb.set(encodedParam, { messageId: finalPost.message_id, name: fileData.fileName });
 
-                // 💾 Backup group me data bhejna aur PIN karna
                 await saveToBackup(encodedParam, finalPost.message_id, fileData.fileName);
 
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
 
-                userStates.set(userId, {
-                    step: 'COMPLETED',
-                    fileId: fileData.fileId,
-                    fileType: fileData.fileType,
-                    lastTrackedLink: botLink
-                });
+                if (userId) {
+                    userStates.set(userId, {
+                        step: 'COMPLETED',
+                        fileId: fileData.fileId,
+                        fileType: fileData.fileType,
+                        lastTrackedLink: botLink
+                    });
+                }
 
                 return ctx.reply(`✅ **Inline Post Created & Tracked Successfully!**\n\n📂 **Name:** ${fileData.fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                     reply_to_message_id: finalPost.message_id,
@@ -370,7 +369,7 @@ bot.on('message', async (ctx) => {
         if (currentState && currentState.step === 'AWAITING_TITLE') {
             const newTitle = text;
             const fileData = currentState;
-            userStates.delete(userId);
+            if (userId) userStates.delete(userId);
 
             try {
                 const channelOptions = {
@@ -393,19 +392,20 @@ bot.on('message', async (ctx) => {
             }
         }
 
-        // --- Normal response logic (Direct upload) ---
+        // --- Normal response logic (Direct upload fix for all file types) ---
         let hasFile = ctx.message.document || ctx.message.video || ctx.message.audio || ctx.message.photo;
         if (hasFile && !currentState) {
             let fileName = "Requested File";
             if (ctx.message.document) fileName = ctx.message.document.file_name;
             else if (ctx.message.video) fileName = ctx.message.video.file_name || "Video File";
+            else if (ctx.message.audio) fileName = ctx.message.audio.file_name || "Audio File";
+            else if (ctx.message.photo) fileName = "Photo File";
 
             const msgIdStr = ctx.message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
             fileDb.set(encodedParam, { messageId: ctx.message.message_id, name: fileName });
 
-            // 💾 Normal file ko bhi backup bhejkar PIN karna
             await saveToBackup(encodedParam, ctx.message.message_id, fileName);
 
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
@@ -417,13 +417,12 @@ bot.on('message', async (ctx) => {
     }
 
     // 2. USER CHAT LOGIC (Downloader part)
-    if (text.startsWith('/start')) {
+    if (text.startsWith('/start') && userId) {
         const param = text.split(' ')[1];
         if (!param) return ctx.reply("👋 Welcome! Please click a file link from our channel to download.");
 
-        // 🔒 Force-join gate: user must join Backup Channel, then Main Channel, before getting the file
         const verified = await enforceJoinOrPrompt(ctx, userId, param);
-        if (!verified) return; // enforceJoinOrPrompt already sent the correct "please join" message
+        if (!verified) return; 
 
         await deliverFile(ctx, param);
     }
