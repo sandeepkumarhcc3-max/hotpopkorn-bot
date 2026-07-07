@@ -24,7 +24,7 @@ const bot = new Telegraf(BOT_TOKEN);
 const fileDb = new Map();
 const userStates = new Map();
 
-// 🚀 ALIVE & PORT FIX (Defaulted to 7860 for Hugging Face Spaces / Render compatibility)
+// 🚀 ALIVE & PORT FIX
 const PORT = process.env.PORT || 7860;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -162,9 +162,44 @@ async function deliverFile(ctx, param) {
     }
 }
 
-// 1. DATABASE GROUP & BACKUP RESTORE LOGIC (Completely rewritten to catch direct files)
+// 💥 DEDICATED COMMANDS HANDLERS 
+bot.command('status', (ctx) => {
+    return ctx.reply("🟢 **Bot is alive and running smoothly!**", { parse_mode: 'Markdown' });
+});
+
+bot.command('inline', (ctx) => {
+    const userId = ctx.from.id;
+    if (ctx.chat.id === DATABASE_GROUP_ID) {
+        userStates.set(userId, { step: 'AWAITING_FILE' });
+        return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...", { parse_mode: 'Markdown' });
+    }
+});
+
+bot.command('forward', (ctx) => {
+    const userId = ctx.from.id;
+    const currentState = userStates.get(userId);
+    if (ctx.chat.id === DATABASE_GROUP_ID) {
+        if (!currentState || !currentState.lastTrackedLink) {
+            return ctx.reply("❌ **No recent file found!** Pehle `/inline` process poori karein.", { parse_mode: 'Markdown' });
+        }
+        currentState.step = 'AWAITING_TITLE';
+        userStates.set(userId, currentState);
+        return ctx.reply("✏️ **Title your post name:** Please send the text/title for your channel post now...", { parse_mode: 'Markdown' });
+    }
+});
+
+// 🎬 NEW: Dedicated /video command for direct tracking without conflict
+bot.command('video', (ctx) => {
+    const userId = ctx.from.id;
+    if (ctx.chat.id === DATABASE_GROUP_ID) {
+        userStates.set(userId, { step: 'AWAITING_DIRECT_VIDEO' });
+        return ctx.reply("🚀 **Send Video:** Please send or forward your video file now, and I will generate the link instantly!", { parse_mode: 'Markdown' });
+    }
+});
+
+
+// 1. DATABASE GROUP, MESSAGE & STATE LOOP LOGIC
 bot.on(['message', 'channel_post'], async (ctx) => {
-    // Message objects extract kar rhe hain
     const message = ctx.message || ctx.channelPost;
     if (!message) return;
 
@@ -173,24 +208,13 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     const currentState = userId ? userStates.get(userId) : null;
     const chatId = ctx.chat.id;
 
-    // ✨ STATUS COMMAND
-    if (text.startsWith('/status')) {
-        return ctx.reply("🟢 **Bot is alive and running smoothly!**", {
-            reply_to_message_id: message.message_id,
-            parse_mode: 'Markdown'
-        });
-    }
-
     // --- Pinned Messages/Logs se Memory Restore karne ka Logic ---
     if (chatId === BACKUP_GROUP_ID && text.startsWith('/restore')) {
         try {
             const fullChat = await ctx.telegram.getChat(BACKUP_GROUP_ID);
-            if (!fullChat.pinned_message) {
-                return ctx.reply("🏁 **Restore Cancelled!** Is group me koi bhi pinned message nahi mila.");
-            }
+            if (!fullChat.pinned_message) return ctx.reply("🏁 **Restore Cancelled!** Is group me koi bhi pinned message nahi mila.");
 
-            const statusMsg = await ctx.reply("🔄 **Memory restoration started...** Scanning backup messages line by line, please wait...");
-            
+            const statusMsg = await ctx.reply("🔄 **Memory restoration started...** Scanning backup messages...");
             const latestPinId = fullChat.pinned_message.message_id;
             let restoredCount = 0;
             const scanRange = 10000; 
@@ -200,10 +224,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             for (let currentId = startId; currentId >= endId; currentId--) {
                 try {
                     const msg = await ctx.telegram.forwardMessage(DATABASE_GROUP_ID, BACKUP_GROUP_ID, currentId).catch(() => null);
-                    
                     if (msg) {
                         await ctx.telegram.deleteMessage(DATABASE_GROUP_ID, msg.message_id).catch(() => null);
-                        
                         const msgText = msg.text || msg.caption || '';
                         if (msgText.includes('DATABASE_LOG:')) {
                             const paramMatch = msgText.match(/PARAM:\s*([^\s|]+)/);
@@ -213,57 +235,43 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                             if (paramMatch && msgIdMatch && nameMatch) {
                                 const key = paramMatch[1].trim();
                                 if (!fileDb.has(key)) {
-                                    fileDb.set(key, { 
-                                        messageId: parseInt(msgIdMatch[1]), 
-                                        name: nameMatch[1].trim() 
-                                    });
+                                    fileDb.set(key, { messageId: parseInt(msgIdMatch[1]), name: nameMatch[1].trim() });
                                     restoredCount++;
                                 }
                             }
                         }
                     }
-                } catch (singleErr) {
-                    continue;
-                }
+                } catch (e) { continue; }
             }
-
-            try {
-                await ctx.telegram.deleteMessage(chatId, statusMsg.message_id);
-            } catch (e) {}
-
-            return ctx.reply(`📊 **Restoration Complete!**\n\n✅ New Restored Links: **${restoredCount}**\n📚 Total Active Links in Memory: **${fileDb.size}**`);
-
+            try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch (e) {}
+            return ctx.reply(`📊 **Restoration Complete!**\n\n✅ New Restored Links: **${restoredCount}**\n📚 Total Active Links: **${fileDb.size}**`);
         } catch (restoreErr) {
-            console.error("Restore Error:", restoreErr);
-            return ctx.reply(`❌ **Restore karne me samasya aayi.**\n\n**Technical Error:** \`${restoreErr.message}\``);
+            return ctx.reply(`❌ **Restore Error:** \`${restoreErr.message}\``);
         }
     }
 
     // Main database group ka logic
     if (chatId === DATABASE_GROUP_ID) {
 
-        // --- Customized /inline command logic ---
-        if (text.startsWith('/inline')) {
-            if (userId) userStates.set(userId, { step: 'AWAITING_FILE' });
-            return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...", {
-                reply_to_message_id: message.message_id,
-                parse_mode: 'Markdown'
-            });
-        }
-
-        // --- /forward command logic ---
-        if (text.startsWith('/forward')) {
-            if (!currentState || !currentState.lastTrackedLink) {
-                return ctx.reply("❌ **No recent file found!** Pehle `/inline` process poori karein.", {
-                    reply_to_message_id: message.message_id,
-                    parse_mode: 'Markdown'
-                });
+        // ⚡ NEW: Dedicated /video state logic (Directly catches the video file)
+        if (currentState && currentState.step === 'AWAITING_DIRECT_VIDEO') {
+            if (!message.video && !message.document) {
+                return ctx.reply("❌ That is not a video file. Please send a proper Video or Document file.");
             }
+            let fileName = "Video File";
+            if (message.video) fileName = message.video.file_name || "Video File";
+            else if (message.document) fileName = message.document.file_name;
 
-            currentState.step = 'AWAITING_TITLE';
-            if (userId) userStates.set(userId, currentState);
+            const msgIdStr = message.message_id.toString();
+            const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
-            return ctx.reply("✏️ **Title your post name:** Please send the text/title for your channel post now...", {
+            fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
+            await saveToBackup(encodedParam, message.message_id, fileName);
+
+            if (userId) userStates.delete(userId); // Clear state
+
+            const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
+            return ctx.reply(`✅ **Video Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                 reply_to_message_id: message.message_id,
                 parse_mode: 'Markdown'
             });
@@ -272,69 +280,32 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         // Step 2: File receive karna (/inline loop ke liye)
         if (currentState && currentState.step === 'AWAITING_FILE') {
             let hasFile = message.document || message.video || message.audio || message.photo;
-            if (!hasFile) {
-                return ctx.reply("❌ That's not a file. Please send an image, video, or document.");
-            }
+            if (!hasFile) return ctx.reply("❌ That's not a file. Please send an image, video, or document.");
 
-            let fileName = "Requested File";
-            let fileType = "";
-            let fileId = "";
-
-            if (message.document) {
-                fileName = message.document.file_name;
-                fileId = message.document.file_id;
-                fileType = "document";
-            } else if (message.video) {
-                fileName = message.video.file_name || "Video File";
-                fileId = message.video.file_id;
-                fileType = "video";
-            } else if (message.audio) {
-                fileName = message.audio.file_name || "Audio File";
-                fileId = message.audio.file_id;
-                fileType = "audio";
-            } else if (message.photo) {
-                fileName = "Photo File";
-                fileId = message.photo[message.photo.length - 1].file_id;
-                fileType = "photo";
-            }
+            let fileName = "Requested File", fileType = "", fileId = "";
+            if (message.document) { fileName = message.document.file_name; fileId = message.document.file_id; fileType = "document"; }
+            else if (message.video) { fileName = message.video.file_name || "Video File"; fileId = message.video.file_id; fileType = "video"; }
+            else if (message.audio) { fileName = message.audio.file_name || "Audio File"; fileId = message.audio.file_id; fileType = "audio"; }
+            else if (message.photo) { fileName = "Photo File"; fileId = message.photo[message.photo.length - 1].file_id; fileType = "photo"; }
 
             if (userId) {
-                userStates.set(userId, {
-                    step: 'AWAITING_LINK',
-                    fileId: fileId,
-                    fileType: fileType,
-                    fileName: fileName,
-                    caption: message.caption || ""
-                });
+                userStates.set(userId, { step: 'AWAITING_LINK', fileId, fileType, fileName, caption: message.caption || "" });
             }
-
-            return ctx.reply("🔗 **Send Link:** Now, please send the URL/Link for the button...", {
-                reply_to_message_id: message.message_id,
-                parse_mode: 'Markdown'
-            });
+            return ctx.reply("🔗 **Send Link:** Now, please send the URL/Link for the button...", { reply_to_message_id: message.message_id, parse_mode: 'Markdown' });
         }
 
-        // Step 3: Link receive karna aur backup me log bhejna
+        // Step 3: Link receive karna aur backup me log bhejna (/inline)
         if (currentState && currentState.step === 'AWAITING_LINK') {
             const urlRegex = /(https?:\/\/[^\s]+)/gi;
             const match = text.match(urlRegex);
-
-            if (!match) {
-                return ctx.reply("❌ Invalid Link! Please send a proper URL.");
-            }
+            if (!match) return ctx.reply("❌ Invalid Link! Please send a proper URL.");
 
             const watchOnlineUrl = match[0];
             const fileData = currentState;
 
             try {
                 let finalPost;
-                const extraOptions = {
-                    caption: fileData.caption,
-                    parse_mode: 'Markdown',
-                    ...Markup.inlineKeyboard([
-                        [Markup.button.url('🍿 Watch Online', watchOnlineUrl)]
-                    ])
-                };
+                const extraOptions = { caption: fileData.caption, parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.url('🍿 Watch Online', watchOnlineUrl)]]) };
 
                 if (fileData.fileType === 'photo') finalPost = await ctx.telegram.sendPhoto(chatId, fileData.fileId, extraOptions);
                 else if (fileData.fileType === 'video') finalPost = await ctx.telegram.sendVideo(chatId, fileData.fileId, extraOptions);
@@ -345,27 +316,13 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
                 fileDb.set(encodedParam, { messageId: finalPost.message_id, name: fileData.fileName });
-
                 await saveToBackup(encodedParam, finalPost.message_id, fileData.fileName);
 
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
+                if (userId) userStates.set(userId, { step: 'COMPLETED', fileId: fileData.fileId, fileType: fileData.fileType, lastTrackedLink: botLink });
 
-                if (userId) {
-                    userStates.set(userId, {
-                        step: 'COMPLETED',
-                        fileId: fileData.fileId,
-                        fileType: fileData.fileType,
-                        lastTrackedLink: botLink
-                    });
-                }
-
-                return ctx.reply(`✅ **Inline Post Created & Tracked Successfully!**\n\n📂 **Name:** ${fileData.fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
-                    reply_to_message_id: finalPost.message_id,
-                    parse_mode: 'Markdown'
-                });
-
+                return ctx.reply(`✅ **Inline Post Created & Tracked Successfully!**\n\n📂 **Name:** ${fileData.fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { reply_to_message_id: finalPost.message_id, parse_mode: 'Markdown' });
             } catch (err) {
-                console.error("Error creating combined post:", err);
                 return ctx.reply("❌ Error compiling the inline post.");
             }
         }
@@ -377,27 +334,20 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             if (userId) userStates.delete(userId);
 
             try {
-                const channelOptions = {
-                    caption: `**${newTitle}**`,
-                    parse_mode: 'Markdown',
-                    ...Markup.inlineKeyboard([
-                        [Markup.button.url('📥 Download Now', fileData.lastTrackedLink)]
-                    ])
-                };
+                const channelOptions = { caption: `**${newTitle}**`, parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.url('📥 Download Now', fileData.lastTrackedLink)]]) };
 
                 if (fileData.fileType === 'photo') await ctx.telegram.sendPhoto(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
                 else if (fileData.fileType === 'video') await ctx.telegram.sendVideo(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
                 else if (fileData.fileType === 'document') await ctx.telegram.sendDocument(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
                 else if (fileData.fileType === 'audio') await ctx.telegram.sendAudio(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
 
-                return ctx.reply("🚀 **Success!** Post aapke private channel par **Download Now** button ke saath publish kar di gayi hai.", { reply_to_message_id: message.message_id });
+                return ctx.reply("🚀 **Success!** Post aapke private channel par publish kar di gayi hai.", { reply_to_message_id: message.message_id });
             } catch (err) {
-                console.error(err);
-                return ctx.reply("❌ Private channel par post bhejne me error aaya. Check karein bot Admin hai.");
+                return ctx.reply("❌ Private channel par post bhejne me error aaya.");
             }
         }
 
-        // --- ⚡ FIXED: Normal direct upload logic for ANY file type ---
+        // --- Normal response fallback (Direct upload) ---
         let isDirectFile = message.document || message.video || message.audio || message.photo;
         if (isDirectFile && !currentState) {
             let fileName = "Requested File";
@@ -410,7 +360,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
-
             await saveToBackup(encodedParam, message.message_id, fileName);
 
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
