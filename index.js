@@ -20,9 +20,8 @@ const MAIN_CH_LINK = "https://t.me/popkornmovie_1";
 const BACKUP_CH_ID = "-1003900661218";
 const BACKUP_CH_LINK = "https://t.me/+1A7MUa-fD71jNDk1";
 
-// Handler timeout badha diya taaki Render server freeze na ho
 const bot = new Telegraf(BOT_TOKEN, {
-    handlerTimeout: 900000 
+    handlerTimeout: 900000 // Timeout extended to 15 minutes for large files processing
 });
 const fileDb = new Map();
 const userStates = new Map();
@@ -138,6 +137,7 @@ async function deliverFile(ctx, param) {
         setTimeout(async () => {
             try {
                 await ctx.telegram.deleteMessage(ctx.chat.id, webAppMsg.message_id);
+                console.log("WebApp URL message deleted automatically after 2 minutes.");
             } catch (err) { console.log("Error during WebApp message auto-deletion:", err.message); }
         }, 120000);
     }
@@ -190,6 +190,7 @@ bot.command('forward', (ctx) => {
     }
 });
 
+// 🎬 Dedicated /video command
 bot.command('video', (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
@@ -254,6 +255,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     // Main database group ka logic
     if (chatId === DATABASE_GROUP_ID) {
 
+        // ⚡ ALL-INCLUSIVE MEDIA EXTRACTION
         let currentFileObj = message.video || message.document || message.audio || message.animation || message.video_note || (message.photo ? message.photo[message.photo.length - 1] : null);
         
         // ⚡ Dedicated /video state logic
@@ -268,6 +270,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
             
+            // Async buffer fix: bina timeout crash ke reply dena
             process.nextTick(async () => {
                 await saveToBackup(encodedParam, message.message_id, fileName);
             });
@@ -362,6 +365,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
             
+            // Timeout Bypass Queue
             process.nextTick(async () => {
                 await saveToBackup(encodedParam, message.message_id, fileName);
             });
@@ -386,4 +390,4 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     }
 });
 
-// ⚡ OVERRIDE POLLING OPTIMIZATION FOR RENDER FREE INSTANCE
+bot.launch().then(() => console.log("Hotpopkornbot is now online..."));
