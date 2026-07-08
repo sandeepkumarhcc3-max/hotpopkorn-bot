@@ -121,6 +121,8 @@ bot.action(/check_join_(.+)/, async (ctx) => {
 
 // 📦 File delivery logic
 async function deliverFile(ctx, param) {
+    const targetChatId = ctx.chat.id; // Chat ID ko variable me store kiya taaki async context loss na ho
+    
     if (!param.startsWith('getfile_')) {
         const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
 
@@ -136,7 +138,7 @@ async function deliverFile(ctx, param) {
 
         setTimeout(async () => {
             try {
-                await ctx.telegram.deleteMessage(ctx.chat.id, webAppMsg.message_id);
+                await ctx.telegram.deleteMessage(targetChatId, webAppMsg.message_id);
                 console.log("WebApp URL message deleted automatically after 2 minutes.");
             } catch (err) { console.log("Error during WebApp message auto-deletion:", err.message); }
         }, 120000);
@@ -149,15 +151,22 @@ async function deliverFile(ctx, param) {
 
         try {
             await ctx.reply("🚀 Processing your secure link... Sending file...");
-            const forwardedMsg = await ctx.telegram.forwardMessage(ctx.chat.id, DATABASE_GROUP_ID, fileData.messageId);
+            const forwardedMsg = await ctx.telegram.forwardMessage(targetChatId, DATABASE_GROUP_ID, fileData.messageId);
             const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies. Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
 
+            // ⏱️ 30 Minutes Delete Logic (Enhanced Error Handling)
             setTimeout(async () => {
                 try {
-                    await ctx.telegram.deleteMessage(ctx.chat.id, forwardedMsg.message_id);
-                    await ctx.telegram.deleteMessage(ctx.chat.id, warningMsg.message_id);
-                } catch (err) { console.log("Error during auto-deletion:", err.message); }
-            }, 1800000);
+                    await ctx.telegram.deleteMessage(targetChatId, forwardedMsg.message_id);
+                    console.log(`Forwarded file message ${forwardedMsg.message_id} deleted.`);
+                } catch (err) { console.log("Error deleting forwarded file:", err.message); }
+
+                try {
+                    await ctx.telegram.deleteMessage(targetChatId, warningMsg.message_id);
+                    console.log(`Warning message ${warningMsg.message_id} deleted.`);
+                } catch (err) { console.log("Error deleting warning message:", err.message); }
+            }, 30 * 60 * 1000); // Strict 30 minutes in milliseconds
+            
         } catch (err) {
             ctx.reply("❌ Error delivering file. Make sure the bot is an Admin in the database group.");
         }
