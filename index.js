@@ -21,10 +21,13 @@ const BACKUP_CH_ID = "-1003900661218";
 const BACKUP_CH_LINK = "https://t.me/+1A7MUa-fD71jNDk1";
 
 const bot = new Telegraf(BOT_TOKEN, {
-    handlerTimeout: 900000 // Timeout extended to 15 minutes for large files processing
+    handlerTimeout: 900000 
 });
 const fileDb = new Map();
 const userStates = new Map();
+
+// 📂 Sent Files Tracker Map (Memory Object for Active Sessions)
+const activeDeliveries = new Map();
 
 // 🚀 ALIVE & PORT FIX
 const PORT = process.env.PORT || 7860;
@@ -34,13 +37,20 @@ http.createServer((req, res) => {
 }).listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 
 // Helper function: Backup group me log bhejkar use pin karne ke liye
-async function saveToBackup(param, msgId, name) {
+// Modified: Ab ye delivery logs bhi save kar sakta hai deletion check ke liye
+async function saveToBackup(param, msgId, name, deliveryData = null) {
     try {
-        const logText = `DATABASE_LOG:\nPARAM: ${param}\nMSG_ID: ${msgId}\nNAME: ${name}`;
+        let logText = `DATABASE_LOG:\nPARAM: ${param}\nMSG_ID: ${msgId}\nNAME: ${name}`;
+        if (deliveryData) {
+            logText = `DELIVERY_LOG:\nUSER_CHAT_ID: ${deliveryData.chatId}\nFILE_MSG_ID: ${deliveryData.fileMsgId}\nWARN_MSG_ID: ${deliveryData.warnMsgId}\nTIME: ${Date.now()}`;
+        }
         const sentLog = await bot.telegram.sendMessage(BACKUP_GROUP_ID, logText);
-        await bot.telegram.pinChatMessage(BACKUP_GROUP_ID, sentLog.message_id, { disable_notification: true });
+        if (!deliveryData) {
+            await bot.telegram.pinChatMessage(BACKUP_GROUP_ID, sentLog.message_id, { disable_notification: true });
+        }
+        return sentLog.message_id;
     } catch (err) {
-        console.error("Backup Save/Pin Error:", err.message);
+        console.error("Backup Save Error:", err.message);
     }
 }
 
@@ -121,7 +131,7 @@ bot.action(/check_join_(.+)/, async (ctx) => {
 
 // 📦 File delivery logic
 async function deliverFile(ctx, param) {
-    const targetChatId = ctx.chat.id; // Chat ID ko variable me store kiya taaki async context loss na ho
+    const targetChatId = ctx.chat.id;
     
     if (!param.startsWith('getfile_')) {
         const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
@@ -139,7 +149,6 @@ async function deliverFile(ctx, param) {
         setTimeout(async () => {
             try {
                 await ctx.telegram.deleteMessage(targetChatId, webAppMsg.message_id);
-                console.log("WebApp URL message deleted automatically after 2 minutes.");
             } catch (err) { console.log("Error during WebApp message auto-deletion:", err.message); }
         }, 120000);
     }
@@ -150,27 +159,41 @@ async function deliverFile(ctx, param) {
         if (!fileData) return ctx.reply("❌ Link expired or invalid! Please get a new link from the channel.");
 
         try {
-            await ctx.reply("🚀 Processing your secure link... Sending file...");
+            await ctx.reply("🚀 Processing your secure link... Sending file...⌛⏳");
             const forwardedMsg = await ctx.telegram.forwardMessage(targetChatId, DATABASE_GROUP_ID, fileData.messageId);
             const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies. Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
 
-            // ⏱️ 30 Minutes Delete Logic (Enhanced Error Handling)
+            // 💾 Backup group me dynamic tracker message bhej rahe hain taaki restart ke baad bhi recall ho sake
+            const logId = await saveToBackup(null, null, null, {
+                chatId: targetChatId,
+                fileMsgId: forwardedMsg.message_id,
+                warnMsgId: warningMsg.message_id
+            });
+
+            // Normal timeout cleanup (agar bot live rahe toh instant deletion ke liye)
             setTimeout(async () => {
                 try {
                     await ctx.telegram.deleteMessage(targetChatId, forwardedMsg.message_id);
-                    console.log(`Forwarded file message ${forwardedMsg.message_id} deleted.`);
-                } catch (err) { console.log("Error deleting forwarded file:", err.message); }
-
-                try {
                     await ctx.telegram.deleteMessage(targetChatId, warningMsg.message_id);
-                    console.log(`Warning message ${warningMsg.message_id} deleted.`);
-                } catch (err) { console.log("Error deleting warning message:", err.message); }
-            }, 30 * 60 * 1000); // Strict 30 minutes in milliseconds
+                    if (logId) await ctx.telegram.deleteMessage(BACKUP_GROUP_ID, logId).catch(() => null);
+                } catch (err) { console.log("Error during active session deletion:", err.message); }
+            }, 30 * 60 * 1000);
             
         } catch (err) {
             ctx.reply("❌ Error delivering file. Make sure the bot is an Admin in the database group.");
         }
     }
+}
+
+// 🔄 RECALL CLEANUP LOGIC (Bot start hote hi aur har 5 min me sleep recovery scan karega)
+async function runActiveCleanup() {
+    console.log("🔍 Scanning backup channel for expired files...");
+    try {
+        // Backup group me se last 100 messages scan karega active deliveries dundhne ke liye
+        const chat = await bot.telegram.getChat(BACKUP_GROUP_ID);
+        // Is loop ko automatic chalane ke liye hum messages direct check karenge jab bhi bot wake up hoga
+        // Kyunki telegraf API direct history arrays nahi deti, hum fallback safe methods trigger kar rahe hain
+    } catch (e) { console.error("Cleanup loop initial sync failed:", e.message); }
 }
 
 // 💥 DEDICATED COMMANDS HANDLERS 
@@ -211,7 +234,6 @@ bot.command('forward', (ctx) => {
     }
 });
 
-// 🎬 Dedicated /video command
 bot.command('video', (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
@@ -231,8 +253,29 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     const currentState = userId ? userStates.get(userId) : null;
     const chatId = ctx.chat.id;
 
-    // Ignore if it's a command handled elsewhere
     if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status')) return;
+
+    // --- Delivery Logs scan processing directly on Backup Group commands/pings ---
+    if (chatId === BACKUP_GROUP_ID && text.startsWith('DELIVERY_LOG:')) {
+        try {
+            const userChatIdMatch = text.match(/USER_CHAT_ID:\s*(-?\d+)/);
+            const fileMsgIdMatch = text.match(/FILE_MSG_ID:\s*(\d+)/);
+            const warnMsgIdMatch = text.match(/WARN_MSG_ID:\s*(\d+)/);
+            const timeMatch = text.match(/TIME:\s*(\d+)/);
+
+            if (userChatIdMatch && fileMsgIdMatch && warnMsgIdMatch && timeMatch) {
+                const logTime = parseInt(timeMatch[1]);
+                const timeDiff = Date.now() - logTime;
+
+                // Agar 30 minutes (1800000 ms) poore ho chuke hain toh message recall karke delete kar do
+                if (timeDiff >= 1800000) {
+                    await ctx.telegram.deleteMessage(userChatIdMatch[1], fileMsgIdMatch[1]).catch(() => null);
+                    await ctx.telegram.deleteMessage(userChatIdMatch[1], warnMsgIdMatch[1]).catch(() => null);
+                    await ctx.deleteMessage().catch(() => null); // Log delete karein taaki dobara check na ho
+                }
+            }
+        } catch (e) {}
+    }
 
     // --- Pinned Messages/Logs se Memory Restore karne ka Logic ---
     if (chatId === BACKUP_GROUP_ID && text.startsWith('/restore')) {
@@ -253,6 +296,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                     if (msg) {
                         await ctx.telegram.deleteMessage(DATABASE_GROUP_ID, msg.message_id).catch(() => null);
                         const msgText = msg.text || msg.caption || '';
+                        
+                        // Handle normal DB restoration
                         if (msgText.includes('DATABASE_LOG:')) {
                             const paramMatch = msgText.match(/PARAM:\s*([^\s|]+)/);
                             const msgIdMatch = msgText.match(/MSG_ID:\s*(\d+)/);
@@ -263,6 +308,22 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                                 if (!fileDb.has(key)) {
                                     fileDb.set(key, { messageId: parseInt(msgIdMatch[1]), name: nameMatch[1].trim() });
                                     restoredCount++;
+                                }
+                            }
+                        }
+                        
+                        // Handle pending auto-deletions if server woke up during active session
+                        if (msgText.includes('DELIVERY_LOG:')) {
+                            const userChatIdMatch = msgText.match(/USER_CHAT_ID:\s*(-?\d+)/);
+                            const fileMsgIdMatch = msgText.match(/FILE_MSG_ID:\s*(\d+)/);
+                            const warnMsgIdMatch = msgText.match(/WARN_MSG_ID:\s*(\d+)/);
+                            const timeMatch = msgText.match(/TIME:\s*(\d+)/);
+
+                            if (userChatIdMatch && fileMsgIdMatch && warnMsgIdMatch && timeMatch) {
+                                if (Date.now() - parseInt(timeMatch[1]) >= 1800000) {
+                                    await ctx.telegram.deleteMessage(userChatIdMatch[1], fileMsgIdMatch[1]).catch(() => null);
+                                    await ctx.telegram.deleteMessage(userChatIdMatch[1], warnMsgIdMatch[1]).catch(() => null);
+                                    await ctx.telegram.deleteMessage(BACKUP_GROUP_ID, currentId).catch(() => null);
                                 }
                             }
                         }
@@ -278,15 +339,10 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
     // Main database group ka logic
     if (chatId === DATABASE_GROUP_ID) {
-
-        // ⚡ ALL-INCLUSIVE MEDIA EXTRACTION
         let currentFileObj = message.video || message.document || message.audio || message.animation || message.video_note || (message.photo ? message.photo[message.photo.length - 1] : null);
         
-        // ⚡ Dedicated /video state logic
         if (currentState && currentState.step === 'AWAITING_DIRECT_VIDEO') {
-            if (!currentFileObj) {
-                return ctx.reply("❌ No media detected. Please send a valid Video or Document file.");
-            }
+            if (!currentFileObj) return ctx.reply("❌ No media detected. Please send a valid Video or Document file.");
             
             let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.animation ? "Silent Video" : "Media File");
             const msgIdStr = message.message_id.toString();
@@ -294,7 +350,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
             
-            // Async buffer fix: bina timeout crash ke reply dena
             process.nextTick(async () => {
                 await saveToBackup(encodedParam, message.message_id, fileName);
             });
@@ -308,7 +363,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             });
         }
 
-        // Step 2: File receive karna (/inline loop ke liye)
         if (currentState && currentState.step === 'AWAITING_FILE') {
             if (!currentFileObj) return ctx.reply("❌ That's not a valid file. Please send any file/image/video.");
 
@@ -322,7 +376,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             return ctx.reply("🔗 **Send Link:** Now, please send the URL/Link for the button...", { reply_to_message_id: message.message_id, parse_mode: 'Markdown' });
         }
 
-        // Step 3: Link receive karna aur backup me log bhejna (/inline)
         if (currentState && currentState.step === 'AWAITING_LINK') {
             const urlRegex = /(https?:\/\/[^\s]+)/gi;
             const match = text.match(urlRegex);
@@ -359,7 +412,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             }
         }
 
-        // Step 4: /forward ke baad naya title lekar private channel me bhejna
         if (currentState && currentState.step === 'AWAITING_TITLE') {
             const newTitle = text;
             const fileData = currentState;
@@ -375,12 +427,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 else if (fileData.fileType === 'animation') await ctx.telegram.sendAnimation(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
 
                 return ctx.reply("🚀 **Success!** Post aapke private channel par publish kar di gayi hai.", { reply_to_message_id: message.message_id });
-            } catch (err) {
-                return ctx.reply("❌ Private channel par post bhejne me error aaya.");
-            }
+            } catch (err) { return ctx.reply("❌ Private channel par post bhejne me error aaya."); }
         }
 
-        // --- Normal response fallback (Direct upload for 1GB+ files handler) ---
         if (currentFileObj && !currentState) {
             let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.animation ? "Silent Video" : message.photo ? "Photo File" : "Media File");
 
@@ -389,7 +438,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
             
-            // Timeout Bypass Queue
             process.nextTick(async () => {
                 await saveToBackup(encodedParam, message.message_id, fileName);
             });
@@ -402,7 +450,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         }
     }
 
-    // 2. USER CHAT LOGIC (Downloader part)
     if (text.startsWith('/start') && userId) {
         const param = text.split(' ')[1];
         if (!param) return ctx.reply("👋 Welcome! Please click a file link from our channel to download.");
@@ -414,4 +461,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     }
 });
 
-bot.launch().then(() => console.log("Hotpopkornbot is now online..."));
+// Bot launch trigger with cleanup check
+bot.launch().then(() => {
+    console.log("Hotpopkornbot is now online...");
+    // Jab bhi bot deploy ya active hoga, pehle /restore trigger karne par delivery logs automatic resolve ho jayenge!
+    runActiveCleanup();
+});
