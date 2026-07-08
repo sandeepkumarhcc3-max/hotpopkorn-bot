@@ -1,7 +1,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const http = require('http'); 
 
-const BOT_TOKEN = '8869980874:AAE_MTb64po36ocmbLFdMtxwCPHT4a9UZ7g'; 
+const BOT_TOKEN = '8869980874:AAF2LGQyeHHUoJHOnFAJ7D0U3NCeI1kG1Kg'; 
 const DATABASE_GROUP_ID = -1003927356068; 
 const WEBAPP_URL = 'https://hotpopkornbotwebapp.vercel.app'; 
 
