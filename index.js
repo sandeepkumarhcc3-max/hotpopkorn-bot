@@ -243,7 +243,6 @@ bot.command('video', (ctx) => {
     }
 });
 
-// New /link command entry point
 bot.command('link', (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
@@ -260,17 +259,36 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
     const text = message.text || message.caption || '';
     const userId = message.from ? message.from.id : null;
-    const currentState = userId ? userStates.get(userId) : null;
     const chatId = ctx.chat.id;
 
-    // --- Handling text mapping for Reply Keyboard Buttons ---
+    // --- Handling text mapping for Reply Keyboard Buttons Directly ---
     if (chatId === DATABASE_GROUP_ID) {
-        if (text === '🖼️ Create Inline Post') return ctx.reply("Running command...").then(() => bot.handleUpdate({ message: { ...message, text: '/inline' }, update_id: ctx.update.update_id }));
-        if (text === '🚀 Instant Video Link') return ctx.reply("Running command...").then(() => bot.handleUpdate({ message: { ...message, text: '/video' }, update_id: ctx.update.update_id }));
-        if (text === '🔗 Shorten Link / Batch') return ctx.reply("Running command...").then(() => bot.handleUpdate({ message: { ...message, text: '/link' }, update_id: ctx.update.update_id }));
-        if (text === '❌ Cancel Operation') return ctx.reply("Running command...").then(() => bot.handleUpdate({ message: { ...message, text: '/cancel' }, update_id: ctx.update.update_id }));
-        if (text === '🟢 Check Status') return ctx.reply("Running command...").then(() => bot.handleUpdate({ message: { ...message, text: '/status' }, update_id: ctx.update.update_id }));
+        if (text === '🖼️ Create Inline Post') {
+            userStates.set(userId, { step: 'AWAITING_FILE' });
+            return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...\n\n_Tip: Kisi bhi waqt cancel karne ke liye /cancel type karein._", { parse_mode: 'Markdown' });
+        }
+        if (text === '🚀 Instant Video Link') {
+            userStates.set(userId, { step: 'AWAITING_DIRECT_VIDEO' });
+            return ctx.reply("🚀 **Send Video:** Please send or forward your video file now, and I will generate the link instantly!\n\n_Tip: Kisi bhi waqt cancel karne ke liye /cancel type karein._", { parse_mode: 'Markdown' });
+        }
+        if (text === '🔗 Shorten Link / Batch') {
+            userStates.set(userId, { step: 'AWAITING_LINKS_INPUT' });
+            return ctx.reply("🔗 **Send Link(s):** Please send a single URL or multiple URLs (each link in a new line) to convert them into bot links.", { parse_mode: 'Markdown' });
+        }
+        if (text === '❌ Cancel Operation') {
+            if (userStates.has(userId)) {
+                userStates.delete(userId);
+                return ctx.reply("❌ **Process Cancelled!** Aapka current operation cancel kar diya gaya hai.", { parse_mode: 'Markdown', ...mainAdminKeyboard });
+            } else {
+                return ctx.reply("ℹ️ **No active process found to cancel.**", { parse_mode: 'Markdown', ...mainAdminKeyboard });
+            }
+        }
+        if (text === '🟢 Check Status') {
+            return ctx.reply("🟢 **Bot is alive and running smoothly!**", { parse_mode: 'Markdown', ...mainAdminKeyboard });
+        }
     }
+
+    const currentState = userId ? userStates.get(userId) : null;
 
     if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link')) return;
 
@@ -368,7 +386,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         for (let i = 0; i < linksFound.length; i++) {
             const currentUrl = linksFound[i];
             try {
-                // Post dummy data to database group with inline link to track
                 const extraOptions = { 
                     parse_mode: 'Markdown', 
                     ...Markup.inlineKeyboard([[Markup.button.url('🍿 Download/Watch online', currentUrl)]]) 
