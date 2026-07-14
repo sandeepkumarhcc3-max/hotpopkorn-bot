@@ -36,7 +36,7 @@ http.createServer((req, res) => {
     res.end('Bot is running safely and alive!');
 }).listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 
-// Persistent Reply Keyboard for Database Group Controls
+// 🎛️ Persistent Control Keyboard for Database Group Controls (Jo feature aapko chahiye tha)
 const mainAdminKeyboard = Markup.keyboard([
     ['🖼️ Create Inline Post', '🚀 Instant Video Link'],
     ['🔗 Shorten Link / Batch', '❌ Cancel Operation'],
@@ -135,67 +135,28 @@ bot.action(/check_join_(.+)/, async (ctx) => {
     await deliverFile(ctx, param);
 });
 
-// 📦 File delivery logic
+// 📦 File delivery logic (YOUR 100% ORIGINAL SYSTEM RESTORED FROM BACKUP FILE)
 async function deliverFile(ctx, param) {
     const targetChatId = ctx.chat.id;
     
-    if (!param.startsWith('getfile_')) {
-        const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
+    // Yahan pure original system par bot strict rahega, sirf WebApp layout send karega.
+    const webAppFinalUrl = `${WEBAPP_URL}?fid=${param}`;
 
-        const webAppMsg = await ctx.reply(
-            `✨ **YOUR REQUESTED FILE IS READY!**\n\n🔒 *Your secure download link has been generated successfully. Click the button below to open the downloader and unlock your file.*\n\n👇  👇  👇`,
-            {
-                parse_mode: 'Markdown',
-                ...Markup.inlineKeyboard([
-                    [Markup.button.webApp('📥 Download Now', webAppFinalUrl)]
-                ])
-            }
-        );
-
-        setTimeout(async () => {
-            try {
-                await ctx.telegram.deleteMessage(targetChatId, webAppMsg.message_id);
-            } catch (err) { console.log("Error during WebApp message auto-deletion:", err.message); }
-        }, 120000);
-    }
-    else {
-        const cleanParam = param.replace('getfile_', '');
-        // Standard Base64 decoding fallback check
-        let decodedParam = cleanParam;
-        try {
-            const rawStr = Buffer.from(cleanParam, 'base64').toString('utf8');
-            if (!isNaN(rawStr)) {
-                decodedParam = rawStr;
-            }
-        } catch(e){}
-
-        const fileData = fileDb.get(decodedParam) || fileDb.get(cleanParam);
-
-        if (!fileData) return ctx.reply("❌ Link expired or invalid! Please get a new link from the channel.");
-
-        try {
-            await ctx.reply("🚀 Processing your secure link... Sending file...⌛⏳");
-            const forwardedMsg = await ctx.telegram.forwardMessage(targetChatId, DATABASE_GROUP_ID, fileData.messageId);
-            const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies. Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
-
-            const logId = await saveToBackup(null, null, null, {
-                chatId: targetChatId,
-                fileMsgId: forwardedMsg.message_id,
-                warnMsgId: warningMsg.message_id
-            });
-
-            setTimeout(async () => {
-                try {
-                    await ctx.telegram.deleteMessage(targetChatId, forwardedMsg.message_id);
-                    await ctx.telegram.deleteMessage(targetChatId, warningMsg.message_id);
-                    if (logId) await ctx.telegram.deleteMessage(BACKUP_GROUP_ID, logId).catch(() => null);
-                } catch (err) { console.log("Error during active session deletion:", err.message); }
-            }, 30 * 60 * 1000);
-            
-        } catch (err) {
-            ctx.reply("❌ Error delivering file. Make sure the bot is an Admin in the database group.");
+    const webAppMsg = await ctx.reply(
+        `✨ **YOUR REQUESTED FILE IS READY!**\n\n🔒 *Your secure download link has been generated successfully. Click the button below to open the downloader and unlock your file.*\n\n👇  👇  👇`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.webApp('📥 Download Now', webAppFinalUrl)]
+            ])
         }
-    }
+    );
+
+    setTimeout(async () => {
+        try {
+            await ctx.telegram.deleteMessage(targetChatId, webAppMsg.message_id);
+        } catch (err) { console.log("Error during WebApp message auto-deletion:", err.message); }
+    }, 120000);
 }
 
 // 🔄 RECALL CLEANUP LOGIC
@@ -268,9 +229,10 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
     const text = message.text || message.caption || '';
     const userId = message.from ? message.from.id : null;
+    const currentState = userId ? userStates.get(userId) : null;
     const chatId = ctx.chat.id;
 
-    // --- Handling text mapping for Reply Keyboard Buttons Directly ---
+    // --- Reply Keyboard buttons execution routing ---
     if (chatId === DATABASE_GROUP_ID) {
         if (text === '🖼️ Create Inline Post') {
             userStates.set(userId, { step: 'AWAITING_FILE' });
@@ -296,8 +258,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             return ctx.reply("🟢 **Bot is alive and running smoothly!**", { parse_mode: 'Markdown', ...mainAdminKeyboard });
         }
     }
-
-    const currentState = userId ? userStates.get(userId) : null;
 
     if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link')) return;
 
@@ -380,7 +340,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         }
     }
 
-    // --- Multi-link/Single-link execution system inside the state loop ---
+    // --- Multi-link/Single-link batch handler ---
     if (chatId === DATABASE_GROUP_ID && currentState && currentState.step === 'AWAITING_LINKS_INPUT') {
         const urlRegex = /(https?:\/\/[^\s]+)/gi;
         const linksFound = text.match(urlRegex);
@@ -395,37 +355,32 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         for (let i = 0; i < linksFound.length; i++) {
             const currentUrl = linksFound[i];
             try {
-                let dummyLogPost;
+                // 🎯 TEXT CHANGES AS REQUESTED: Text standard message block banega
+                const customText = `Your file is ready click download button below 👇🏻`;
                 
-                // 1st Try: Send with Inline Button (Requires Admin Access/Permission in DB Group)
-                try {
-                    const extraOptions = { 
-                        parse_mode: 'Markdown', 
-                        ...Markup.inlineKeyboard([[Markup.button.url('🍿 Download/Watch online', currentUrl)]]) 
-                    };
-                    dummyLogPost = await ctx.telegram.sendMessage(DATABASE_GROUP_ID, `🔗 **TRACKED INTERNET LINK BLOCK**\n\nURL: ${currentUrl}`, extraOptions);
-                } catch (btnErr) {
-                    // Fallback Plain-Text: If inline keyboard fails, send it as safe plain text
-                    dummyLogPost = await ctx.telegram.sendMessage(DATABASE_GROUP_ID, `🔗 **TRACKED INTERNET LINK BLOCK (SAFE MODE)**\n\nURL: ${currentUrl}`);
-                }
+                // 🔗 INLINE BUTTON FOR THE ORIGINAL SYSTEM REDIRECT (USER INTERNET LINK PATH)
+                const extraOptions = { 
+                    parse_mode: 'Markdown', 
+                    ...Markup.inlineKeyboard([[Markup.button.url('🍿 Download/Watch online', currentUrl)]]) 
+                };
 
+                // Database group me store karein
+                const dummyLogPost = await ctx.telegram.sendMessage(DATABASE_GROUP_ID, customText, extraOptions);
                 const msgIdStr = dummyLogPost.message_id.toString();
-                // Safe and clean standard Base64 encoding
-                const encodedParam = Buffer.from(msgIdStr).toString('base64').replace(/=/g, '');
+                const encodedParam = Buffer.from(msgIdStr).toString('base64url'); // Keep standard base64url mapping from backup file
 
                 const fileNamePlaceholder = `Web Link ${i + 1}`;
                 
-                // Set both regular ID and encoded variant inside the db to avoid delivery breaks
-                fileDb.set(msgIdStr, { messageId: dummyLogPost.message_id, name: fileNamePlaceholder });
                 fileDb.set(encodedParam, { messageId: dummyLogPost.message_id, name: fileNamePlaceholder });
 
                 await saveToBackup(encodedParam, dummyLogPost.message_id, fileNamePlaceholder);
 
-                const generatedBotLink = `https://t.me/${ctx.botInfo.username}?start=getfile_${encodedParam}`;
+                // FINAL SHORT BOT LINK (Kyunki deliverFile un-touched hai, ye link automatic pure webapp flow ko load karega)
+                const generatedBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                 responsePayload += `🔹 **Link ${i + 1}:**\n\`${generatedBotLink}\`\n\n`;
             } catch (err) {
-                console.error("Link processing error at index " + i + ":", err.message);
-                responsePayload += `❌ **Link ${i + 1}:** Error tracking this specific URL.\n\n`;
+                console.error("Link processing error:", err.message);
+                responsePayload += `❌ **Link ${i + 1}:** Error tracking this URL.\n\n`;
             }
         }
 
@@ -443,10 +398,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             
             let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.animation ? "Silent Video" : "Media File");
             const msgIdStr = message.message_id.toString();
-            const encodedParam = Buffer.from(msgIdStr).toString('base64').replace(/=/g, '');
+            const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
-            fileDb.set(msgIdStr, { messageId: message.message_id, name: fileName });
             
             process.nextTick(async () => {
                 await saveToBackup(encodedParam, message.message_id, fileName);
@@ -454,7 +408,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             if (userId) userStates.delete(userId); 
 
-            const botLink = `https://t.me/${ctx.botInfo.username}?start=getfile_${encodedParam}`;
+            const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **Video Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                 reply_to_message_id: message.message_id,
                 parse_mode: 'Markdown',
@@ -494,21 +448,20 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 else if (fileData.fileType === 'animation') finalPost = await ctx.telegram.sendAnimation(chatId, fileData.fileId, extraOptions);
 
                 const msgIdStr = finalPost.message_id.toString();
-                const encodedParam = Buffer.from(msgIdStr).toString('base64').replace(/=/g, '');
+                const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
                 fileDb.set(encodedParam, { messageId: finalPost.message_id, name: fileData.fileName });
-                fileDb.set(msgIdStr, { messageId: finalPost.message_id, name: fileData.fileName });
                 
                 process.nextTick(async () => {
                     await saveToBackup(encodedParam, finalPost.message_id, fileData.fileName);
                 });
 
-                const botLink = `https://t.me/${ctx.botInfo.username}?start=getfile_${encodedParam}`;
+                const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                 if (userId) userStates.set(userId, { step: 'COMPLETED', fileId: fileData.fileId, fileType: fileData.fileType, lastTrackedLink: botLink });
 
                 return ctx.reply(`✅ **Inline Post Created & Tracked Successfully!**\n\n📂 **Name:** ${fileData.fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { reply_to_message_id: finalPost.message_id, parse_mode: 'Markdown', ...mainAdminKeyboard });
             } catch (err) {
-                return ctx.reply("❌ Error compiling the inline post. Ensure Bot is Admin with full rights.", mainAdminKeyboard);
+                return ctx.reply("❌ Error compiling the inline post.", mainAdminKeyboard);
             }
         }
 
@@ -534,16 +487,15 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             let fileName = currentFileObj.file_name || (message.video ? "Video File" : message.animation ? "Silent Video" : message.photo ? "Photo File" : "Media File");
 
             const msgIdStr = message.message_id.toString();
-            const encodedParam = Buffer.from(msgIdStr).toString('base64').replace(/=/g, '');
+            const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
             fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
-            fileDb.set(msgIdStr, { messageId: message.message_id, name: fileName });
             
             process.nextTick(async () => {
                 await saveToBackup(encodedParam, message.message_id, fileName);
             });
 
-            const botLink = `https://t.me/${ctx.botInfo.username}?start=getfile_${encodedParam}`;
+            const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **File Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                 reply_to_message_id: message.message_id,
                 parse_mode: 'Markdown',
