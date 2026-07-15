@@ -39,9 +39,10 @@ http.createServer((req, res) => {
 // 🛠️ Permanent Keyboard Menu Helper for Database Group
 const getAdminMenu = () => {
     return Markup.keyboard([
-        ['🖼️ Inline Post', '🚀 Send Video'],
-        ['🔗 Batch Links', '✏️ Forward Post'],
-        ['❌ Cancel Operation', '🟢 Bot Status']
+        ['🖼️ Inline Post', '🎬 Batch Inline'],
+        ['🚀 Send Video', '🔗 Batch Links'],
+        ['✏️ Forward Post', '❌ Cancel Operation'],
+        ['🟢 Bot Status']
     ]).resize();
 };
 
@@ -61,6 +62,16 @@ async function saveToBackup(param, msgId, name, deliveryData = null) {
         console.error("Backup Save Error:", err.message);
     }
 }
+
+// Helper to construct Batch Inline Toggle Keyboard
+const getBatchInlineKeyboard = (selections) => {
+    return Markup.inlineKeyboard([
+        [Markup.button.callback(`${selections['480p'] ? '✅' : '❌'} 480p`, 'toggle_480p')],
+        [Markup.button.callback(`${selections['720p'] ? '✅' : '❌'} 720p`, 'toggle_720p')],
+        [Markup.button.callback(`${selections['1080p'] ? '✅' : '❌'} 1080p`, 'toggle_1080p')],
+        [Markup.button.callback('👉 Done (Aage Badhein)', 'batchinline_done')]
+    ]);
+};
 
 // 🔒 Force-Join check
 async function checkForceJoin(ctx, userId) {
@@ -251,6 +262,19 @@ const handleLinkBatch = (ctx) => {
     }
 };
 
+// --- NEW HANDLER FOR BATCH INLINE ---
+const handleBatchInline = (ctx) => {
+    const userId = ctx.from.id;
+    if (ctx.chat.id === DATABASE_GROUP_ID) {
+        // Default: All active
+        const selections = { '480p': true, '720p': true, '1080p': true };
+        userStates.set(userId, { step: 'AWAITING_BATCH_SELECTION', selections });
+        return ctx.reply("🎬 **Batch Inline Menu:** Qualities choose karein jinhe post me rakhna hai (Toggling click kijiye):", {
+            ...getBatchInlineKeyboard(selections)
+        });
+    }
+};
+
 // Bind commands
 bot.command('status', handleStatus);
 bot.command('cancel', handleCancel);
@@ -258,6 +282,48 @@ bot.command('inline', handleInline);
 bot.command('forward', handleForward);
 bot.command('video', handleVideo);
 bot.command('link', handleLinkBatch);
+bot.command('batchinline', handleBatchInline);
+
+// --- TOGGLE CALLBACK HANDLERS ---
+bot.action(/toggle_(480p|720p|1080p)/, async (ctx) => {
+    const userId = ctx.from.id;
+    const quality = ctx.match[1];
+    const currentState = userStates.get(userId);
+
+    if (currentState && currentState.step === 'AWAITING_BATCH_SELECTION') {
+        currentState.selections[quality] = !currentState.selections[quality];
+        userStates.set(userId, currentState);
+
+        try {
+            await ctx.editMessageText("🎬 **Batch Inline Menu:** Qualities choose karein jinhe post me rakhna hai (Toggling click kijiye):", {
+                ...getBatchInlineKeyboard(currentState.selections)
+            });
+        } catch (err) {}
+    }
+    await ctx.answerCbQuery();
+});
+
+// --- DONE ACTION HANDLER ---
+bot.action('batchinline_done', async (ctx) => {
+    const userId = ctx.from.id;
+    const currentState = userStates.get(userId);
+
+    if (currentState && currentState.step === 'AWAITING_BATCH_SELECTION') {
+        const activeQualities = Object.keys(currentState.selections).filter(q => currentState.selections[q]);
+        
+        if (activeQualities.length === 0) {
+            return ctx.answerCbQuery("⚠️ Kam se kam ek quality select karna zaroori hai!", { show_alert: true });
+        }
+
+        currentState.step = 'AWAITING_BATCH_IMAGE';
+        userStates.set(userId, currentState);
+
+        await ctx.answerCbQuery("Qualities selected!");
+        await ctx.editMessageText(`✅ Selected Qualities: **${activeQualities.join(', ')}**\n\n🖼️ Ab please ek **Image (Photo)** bhejein jise aap background post banana chahte hain...`, { parse_mode: 'Markdown' });
+    } else {
+        await ctx.answerCbQuery("Invalid Session.");
+    }
+});
 
 
 // 1. DATABASE GROUP, MESSAGE & STATE LOOP LOGIC
@@ -278,9 +344,10 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         if (text === '✏️ Forward Post') return handleForward(ctx);
         if (text === '🚀 Send Video') return handleVideo(ctx);
         if (text === '🔗 Batch Links') return handleLinkBatch(ctx);
+        if (text === '🎬 Batch Inline') return handleBatchInline(ctx);
     }
 
-    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link')) return;
+    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link') || text.startsWith('/batchinline')) return;
 
     // --- Delivery Logs scan processing ---
     if (chatId === BACKUP_GROUP_ID && text.startsWith('DELIVERY_LOG:')) {
@@ -364,7 +431,83 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     // Main database group ka logic
     if (chatId === DATABASE_GROUP_ID) {
         
-        // --- NEW BATCH LINK PROCESSING LOGIC ---
+        // --- BATCH INLINE STATE: AWAITING IMAGE ---
+        if (currentState && currentState.step === 'AWAITING_BATCH_IMAGE') {
+            if (!message.photo) return ctx.reply("❌ Invalid format. Please send or forward an Image (Photo) only.");
+
+            const photoId = message.photo[message.photo.length - 1].file_id;
+            currentState.photoId = photoId;
+            currentState.caption = message.caption || "";
+            currentState.step = 'AWAITING_BATCH_URLS';
+            userStates.set(userId, currentState);
+
+            return ctx.reply("🔗 **Send Batch Links:** Ab sabhi quality links sequence me bhejhein (Aap separate lines ya spaces use kar sakte hain)...", getAdminMenu());
+        }
+
+        // --- BATCH INLINE STATE: AWAITING LINKS & PROCESSING ---
+        if (currentState && currentState.step === 'AWAITING_BATCH_URLS') {
+            const urlRegex = /(https?:\/\/[^\s]+)/gi;
+            const foundLinks = text.match(urlRegex);
+
+            if (!foundLinks || foundLinks.length === 0) {
+                return ctx.reply("❌ No valid links found! Please send proper URLs.");
+            }
+
+            let finalQualities = Object.keys(currentState.selections).filter(q => currentState.selections[q]);
+
+            // Override Fallback Rule: Agar links exactly 3 hain, automatically saari standard qualities active karo.
+            if (foundLinks.length === 3) {
+                finalQualities = ['480p', '720p', '1080p'];
+            }
+
+            if (foundLinks.length < finalQualities.length) {
+                return ctx.reply(`❌ Links shortage! Aapne **${finalQualities.length}** qualities select ki thi par sirf **${foundLinks.length}** link(s) diye. Please sabhi ke links bhein ya naye sire se karein.`);
+            }
+
+            const processMsg = await ctx.reply("⏳ **Generating Batch Posts... Please wait...**");
+            const outputLinksList = [];
+
+            for (let i = 0; i < finalQualities.length; i++) {
+                const currentQuality = finalQualities[i];
+                const targetLink = foundLinks[i];
+                const postCaption = `⚡ **Quality:** ${currentQuality}\n\n${currentState.caption || ''}`;
+
+                try {
+                    // Photo post with respective inline button
+                    const finalPost = await ctx.telegram.sendPhoto(chatId, currentState.photoId, {
+                        caption: postCaption,
+                        parse_mode: 'Markdown',
+                        ...Markup.inlineKeyboard([[Markup.button.url('🍿 Download/Watch online', targetLink)]])
+                    });
+
+                    const msgIdStr = finalPost.message_id.toString();
+                    const encodedParam = Buffer.from(msgIdStr).toString('base64url');
+                    const trackerName = `Batch Inline [${currentQuality}] - Msg ID: ${msgIdStr}`;
+
+                    // DB Set
+                    fileDb.set(encodedParam, { messageId: finalPost.message_id, name: trackerName });
+
+                    // Log to Backup Group
+                    await saveToBackup(encodedParam, finalPost.message_id, trackerName);
+
+                    const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
+                    outputLinksList.push(`🍿 **${currentQuality}:** \`${finalBotLink}\``);
+
+                } catch (err) {
+                    outputLinksList.push(`❌ **${currentQuality}:** Generation Failed.`);
+                }
+            }
+
+            if (userId) userStates.delete(userId);
+            await ctx.telegram.deleteMessage(chatId, processMsg.message_id).catch(() => null);
+
+            return ctx.reply(`📊 **Batch Inline Generated Successfully!**\n\n${outputLinksList.join('\n\n')}\n\n✨ _Aap upar diye gaye links ko directly post me use kar sakte hain!_`, {
+                parse_mode: 'Markdown',
+                ...getAdminMenu()
+            });
+        }
+
+        // --- OLD BATCH LINK PROCESSING LOGIC ---
         if (currentState && currentState.step === 'AWAITING_BATCH_LINKS') {
             const urlRegex = /(https?:\/\/[^\s]+)/gi;
             const foundLinks = text.match(urlRegex);
