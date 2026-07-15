@@ -36,8 +36,16 @@ http.createServer((req, res) => {
     res.end('Bot is running safely and alive!');
 }).listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 
+// 🛠️ Permanent Keyboard Menu Helper for Database Group
+const getAdminMenu = () => {
+    return Markup.keyboard([
+        ['🖼️ Inline Post', '🚀 Send Video'],
+        ['🔗 Batch Links', '✏️ Forward Post'],
+        ['❌ Cancel Operation', '🟢 Bot Status']
+    ]).resize();
+};
+
 // Helper function: Backup group me log bhejkar use pin karne ke liye
-// Modified: Ab ye delivery logs bhi save kar sakta hai deletion check ke liye
 async function saveToBackup(param, msgId, name, deliveryData = null) {
     try {
         let logText = `DATABASE_LOG:\nPARAM: ${param}\nMSG_ID: ${msgId}\nNAME: ${name}`;
@@ -163,14 +171,12 @@ async function deliverFile(ctx, param) {
             const forwardedMsg = await ctx.telegram.forwardMessage(targetChatId, DATABASE_GROUP_ID, fileData.messageId);
             const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies. Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
 
-            // 💾 Backup group me dynamic tracker message bhej rahe hain taaki restart ke baad bhi recall ho sake
             const logId = await saveToBackup(null, null, null, {
                 chatId: targetChatId,
                 fileMsgId: forwardedMsg.message_id,
                 warnMsgId: warningMsg.message_id
             });
 
-            // Normal timeout cleanup (agar bot live rahe toh instant deletion ke liye)
             setTimeout(async () => {
                 try {
                     await ctx.telegram.deleteMessage(targetChatId, forwardedMsg.message_id);
@@ -185,62 +191,73 @@ async function deliverFile(ctx, param) {
     }
 }
 
-// 🔄 RECALL CLEANUP LOGIC (Bot start hote hi aur har 5 min me sleep recovery scan karega)
+// 🔄 RECALL CLEANUP LOGIC
 async function runActiveCleanup() {
     console.log("🔍 Scanning backup channel for expired files...");
     try {
-        // Backup group me se last 100 messages scan karega active deliveries dundhne ke liye
         const chat = await bot.telegram.getChat(BACKUP_GROUP_ID);
-        // Is loop ko automatic chalane ke liye hum messages direct check karenge jab bhi bot wake up hoga
-        // Kyunki telegraf API direct history arrays nahi deti, hum fallback safe methods trigger kar rahe hain
     } catch (e) { console.error("Cleanup loop initial sync failed:", e.message); }
 }
 
-// 💥 DEDICATED COMMANDS HANDLERS 
-bot.command('status', (ctx) => {
-    return ctx.reply("🟢 **Bot is alive and running smoothly!**", { parse_mode: 'Markdown' });
-});
+// 💥 DEDICATED COMMANDS HANDLERS & KEYBOARD INTERCEPTORS
+const handleStatus = (ctx) => ctx.reply("🟢 **Bot is alive and running smoothly!**", { parse_mode: 'Markdown', ...getAdminMenu() });
 
-bot.command('cancel', (ctx) => {
+const handleCancel = (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
         if (userStates.has(userId)) {
             userStates.delete(userId);
-            return ctx.reply("❌ **Process Cancelled!** Aapka current operation cancel kar diya gaya hai.", { parse_mode: 'Markdown' });
+            return ctx.reply("❌ **Process Cancelled!** Aapka current operation cancel kar diya gaya hai.", getAdminMenu());
         } else {
-            return ctx.reply("ℹ️ **No active process found to cancel.**", { parse_mode: 'Markdown' });
+            return ctx.reply("ℹ️ **No active process found to cancel.**", getAdminMenu());
         }
     }
-});
+};
 
-bot.command('inline', (ctx) => {
+const handleInline = (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
         userStates.set(userId, { step: 'AWAITING_FILE' });
-        return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...\n\n_Tip: Kisi bhi waqt cancel karne ke liye /cancel type karein._", { parse_mode: 'Markdown' });
+        return ctx.reply("🖼️ **Set Image/File:** Please send or forward the file (Photo/Video/Document) now...", { parse_mode: 'Markdown', ...getAdminMenu() });
     }
-});
+};
 
-bot.command('forward', (ctx) => {
+const handleForward = (ctx) => {
     const userId = ctx.from.id;
     const currentState = userStates.get(userId);
     if (ctx.chat.id === DATABASE_GROUP_ID) {
         if (!currentState || !currentState.lastTrackedLink) {
-            return ctx.reply("❌ **No recent file found!** Pehle `/inline` process poori karein.", { parse_mode: 'Markdown' });
+            return ctx.reply("❌ **No recent file found!** Pehle `🖼️ Inline Post` process poori karein.", getAdminMenu());
         }
         currentState.step = 'AWAITING_TITLE';
         userStates.set(userId, currentState);
-        return ctx.reply("✏️ **Title your post name:** Please send the text/title for your channel post now...", { parse_mode: 'Markdown' });
+        return ctx.reply("✏️ **Title your post name:** Please send the text/title for your channel post now...", { parse_mode: 'Markdown', ...getAdminMenu() });
     }
-});
+};
 
-bot.command('video', (ctx) => {
+const handleVideo = (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
         userStates.set(userId, { step: 'AWAITING_DIRECT_VIDEO' });
-        return ctx.reply("🚀 **Send Video:** Please send or forward your video file now, and I will generate the link instantly!\n\n_Tip: Kisi bhi waqt cancel karne ke liye /cancel type karein._", { parse_mode: 'Markdown' });
+        return ctx.reply("🚀 **Send Video:** Please send or forward your video file now, and I will generate the link instantly!", { parse_mode: 'Markdown', ...getAdminMenu() });
     }
-});
+};
+
+const handleLinkBatch = (ctx) => {
+    const userId = ctx.from.id;
+    if (ctx.chat.id === DATABASE_GROUP_ID) {
+        userStates.set(userId, { step: 'AWAITING_BATCH_LINKS' });
+        return ctx.reply("🔗 **Send Batch Links:** Please send all your links now (Separate multiple links with a new line or spaces)...", { parse_mode: 'Markdown', ...getAdminMenu() });
+    }
+};
+
+// Bind commands
+bot.command('status', handleStatus);
+bot.command('cancel', handleCancel);
+bot.command('inline', handleInline);
+bot.command('forward', handleForward);
+bot.command('video', handleVideo);
+bot.command('link', handleLinkBatch);
 
 
 // 1. DATABASE GROUP, MESSAGE & STATE LOOP LOGIC
@@ -253,9 +270,19 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     const currentState = userId ? userStates.get(userId) : null;
     const chatId = ctx.chat.id;
 
-    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status')) return;
+    // Route Text Menu Buttons to respective handlers
+    if (chatId === DATABASE_GROUP_ID) {
+        if (text === '🟢 Bot Status') return handleStatus(ctx);
+        if (text === '❌ Cancel Operation') return handleCancel(ctx);
+        if (text === '🖼️ Inline Post') return handleInline(ctx);
+        if (text === '✏️ Forward Post') return handleForward(ctx);
+        if (text === '🚀 Send Video') return handleVideo(ctx);
+        if (text === '🔗 Batch Links') return handleLinkBatch(ctx);
+    }
 
-    // --- Delivery Logs scan processing directly on Backup Group commands/pings ---
+    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link')) return;
+
+    // --- Delivery Logs scan processing ---
     if (chatId === BACKUP_GROUP_ID && text.startsWith('DELIVERY_LOG:')) {
         try {
             const userChatIdMatch = text.match(/USER_CHAT_ID:\s*(-?\d+)/);
@@ -267,17 +294,16 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 const logTime = parseInt(timeMatch[1]);
                 const timeDiff = Date.now() - logTime;
 
-                // Agar 30 minutes (1800000 ms) poore ho chuke hain toh message recall karke delete kar do
                 if (timeDiff >= 1800000) {
                     await ctx.telegram.deleteMessage(userChatIdMatch[1], fileMsgIdMatch[1]).catch(() => null);
                     await ctx.telegram.deleteMessage(userChatIdMatch[1], warnMsgIdMatch[1]).catch(() => null);
-                    await ctx.deleteMessage().catch(() => null); // Log delete karein taaki dobara check na ho
+                    await ctx.deleteMessage().catch(() => null);
                 }
             }
         } catch (e) {}
     }
 
-    // --- Pinned Messages/Logs se Memory Restore karne ka Logic ---
+    // --- Memory Restore Logic ---
     if (chatId === BACKUP_GROUP_ID && text.startsWith('/restore')) {
         try {
             const fullChat = await ctx.telegram.getChat(BACKUP_GROUP_ID);
@@ -297,7 +323,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                         await ctx.telegram.deleteMessage(DATABASE_GROUP_ID, msg.message_id).catch(() => null);
                         const msgText = msg.text || msg.caption || '';
                         
-                        // Handle normal DB restoration
                         if (msgText.includes('DATABASE_LOG:')) {
                             const paramMatch = msgText.match(/PARAM:\s*([^\s|]+)/);
                             const msgIdMatch = msgText.match(/MSG_ID:\s*(\d+)/);
@@ -312,7 +337,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                             }
                         }
                         
-                        // Handle pending auto-deletions if server woke up during active session
                         if (msgText.includes('DELIVERY_LOG:')) {
                             const userChatIdMatch = msgText.match(/USER_CHAT_ID:\s*(-?\d+)/);
                             const fileMsgIdMatch = msgText.match(/FILE_MSG_ID:\s*(\d+)/);
@@ -339,6 +363,56 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
     // Main database group ka logic
     if (chatId === DATABASE_GROUP_ID) {
+        
+        // --- NEW BATCH LINK PROCESSING LOGIC ---
+        if (currentState && currentState.step === 'AWAITING_BATCH_LINKS') {
+            const urlRegex = /(https?:\/\/[^\s]+)/gi;
+            const foundLinks = text.match(urlRegex);
+
+            if (!foundLinks || foundLinks.length === 0) {
+                return ctx.reply("❌ No valid links found! Please send proper URLs.", getAdminMenu());
+            }
+
+            const processingMsg = await ctx.reply(`⏳ **Processing ${foundLinks.length} link(s)... Please wait.**`);
+            let outputLinksList = [];
+
+            for (let i = 0; i < foundLinks.length; i++) {
+                const targetUrl = foundLinks[i];
+                try {
+                    // Create text post with dynamic inline button inside database group
+                    const textPost = await ctx.telegram.sendMessage(chatId, `✨ **YOUR REQUESTED FILE IS READY!**\n\n🔒 *Your secure download link has been generated successfully. Click the button below to open the downloader and unlock your file.*`, {
+                        parse_mode: 'Markdown',
+                        ...Markup.inlineKeyboard([[Markup.button.url('🍿 Download/Watch online', targetUrl)]])
+                    });
+
+                    const msgIdStr = textPost.message_id.toString();
+                    const encodedParam = Buffer.from(msgIdStr).toString('base64url');
+                    const dummyName = `Text Link Post #${msgIdStr}`;
+
+                    // Set in Memory DB
+                    fileDb.set(encodedParam, { messageId: textPost.message_id, name: dummyName });
+
+                    // Save to Backup
+                    await saveToBackup(encodedParam, textPost.message_id, dummyName);
+
+                    const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
+                    outputLinksList.push(`🔗 **Link ${i+1}:** \`${finalBotLink}\``);
+
+                } catch (linkErr) {
+                    outputLinksList.push(`❌ **Link ${i+1}:** Failed to process (${targetUrl.substring(0, 20)}...)`);
+                }
+            }
+
+            if (userId) userStates.delete(userId);
+            await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => null);
+            
+            // Send final batch compilation to the Admin
+            return ctx.reply(`📊 **Batch Processing Complete!**\n\n${outputLinksList.join('\n\n')}\n\n✨ _Copy the links above for your channel!_`, {
+                parse_mode: 'Markdown',
+                ...getAdminMenu()
+            });
+        }
+
         let currentFileObj = message.video || message.document || message.audio || message.animation || message.video_note || (message.photo ? message.photo[message.photo.length - 1] : null);
         
         if (currentState && currentState.step === 'AWAITING_DIRECT_VIDEO') {
@@ -359,7 +433,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **Video Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                 reply_to_message_id: message.message_id,
-                parse_mode: 'Markdown'
+                parse_mode: 'Markdown',
+                ...getAdminMenu()
             });
         }
 
@@ -406,9 +481,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                 if (userId) userStates.set(userId, { step: 'COMPLETED', fileId: fileData.fileId, fileType: fileData.fileType, lastTrackedLink: botLink });
 
-                return ctx.reply(`✅ **Inline Post Created & Tracked Successfully!**\n\n📂 **Name:** ${fileData.fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { reply_to_message_id: finalPost.message_id, parse_mode: 'Markdown' });
+                return ctx.reply(`✅ **Inline Post Created & Tracked Successfully!**\n\n📂 **Name:** ${fileData.fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { reply_to_message_id: finalPost.message_id, parse_mode: 'Markdown', ...getAdminMenu() });
             } catch (err) {
-                return ctx.reply("❌ Error compiling the inline post.");
+                return ctx.reply("❌ Error compiling the inline post.", getAdminMenu());
             }
         }
 
@@ -426,8 +501,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 else if (fileData.fileType === 'audio') await ctx.telegram.sendAudio(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
                 else if (fileData.fileType === 'animation') await ctx.telegram.sendAnimation(PRIVATE_CHANNEL_ID, fileData.fileId, channelOptions);
 
-                return ctx.reply("🚀 **Success!** Post aapke private channel par publish kar di gayi hai.", { reply_to_message_id: message.message_id });
-            } catch (err) { return ctx.reply("❌ Private channel par post bhejne me error aaya."); }
+                return ctx.reply("🚀 **Success!** Post aapke private channel par publish kar di gayi hai.", { reply_to_message_id: message.message_id, ...getAdminMenu() });
+            } catch (err) { return ctx.reply("❌ Private channel par post bhejne me error aaya.", getAdminMenu()); }
         }
 
         if (currentFileObj && !currentState) {
@@ -445,7 +520,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **File Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                 reply_to_message_id: message.message_id,
-                parse_mode: 'Markdown'
+                parse_mode: 'Markdown',
+                ...getAdminMenu()
             });
         }
     }
@@ -464,6 +540,5 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 // Bot launch trigger with cleanup check
 bot.launch().then(() => {
     console.log("Hotpopkornbot is now online...");
-    // Jab bhi bot deploy ya active hoga, pehle /restore trigger karne par delivery logs automatic resolve ho jayenge!
     runActiveCleanup();
 });
