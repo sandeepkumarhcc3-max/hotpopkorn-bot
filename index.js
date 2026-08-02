@@ -1,7 +1,5 @@
 const { Telegraf, Markup } = require('telegraf');
 const http = require('http'); 
-const fs = require('fs');
-const path = require('path');
 
 const BOT_TOKEN = '8869980874:AAF2LGQyeHHUoJHOnFAJ7D0U3NCeI1kG1Kg'; 
 const DATABASE_GROUP_ID = -1003927356068; 
@@ -42,7 +40,7 @@ http.createServer((req, res) => {
 
 // ==================== 📦 JSON CLOUD SYNC SYSTEM ====================
 
-// 1. JSON ko Group me Save aur Pin karne ka logic (Debounced)
+// 1. JSON ko Group me Save aur Pin karne ka logic
 let saveTimeout = null;
 async function saveDbToTelegramImmediate() {
     try {
@@ -116,7 +114,7 @@ const getAdminMenu = () => {
     ]).resize();
 };
 
-// Helper function: Backup group me log bhejkar use pin karne ke liye (Delivery Logs ke liye)
+// Helper function: Backup group me log bhejkar pin aur sync karne ke liye
 async function saveToBackup(param, msgId, name, deliveryData = null) {
     try {
         let logText = `DATABASE_LOG:\nPARAM: ${param}\nMSG_ID: ${msgId}\nNAME: ${name}`;
@@ -125,7 +123,7 @@ async function saveToBackup(param, msgId, name, deliveryData = null) {
         }
         const sentLog = await bot.telegram.sendMessage(BACKUP_GROUP_ID, logText);
         
-        // Trigger JSON auto-update whenever a new file record is created
+        // Naye file record banne par JSON auto-update trigger karo
         if (!deliveryData) {
             triggerDbSave();
         }
@@ -276,7 +274,7 @@ async function deliverFile(ctx, param) {
 
 // 🔄 RECALL CLEANUP LOGIC
 async function runActiveCleanup() {
-    console.log("🔍 Syncing with cloud JSON database...");
+    console.log("🔍 Pre-loading database from cloud JSON...");
     await restoreDbFromTelegram();
 }
 
@@ -417,7 +415,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         if (text === '🎬 Batch Inline') return handleBatchInline(ctx);
     }
 
-    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link') || text.startsWith('/batchinline') || text.startsWith('/update')) return;
+    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link') || text.startsWith('/batchinline')) return;
 
     // --- Delivery Logs scan processing ---
     if (chatId === BACKUP_GROUP_ID && text.startsWith('DELIVERY_LOG:')) {
@@ -440,18 +438,20 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         } catch (e) {}
     }
 
-    // --- 🛠️ ONE-TIME MIGRATION COMMAND: /update ---
-    if (chatId === BACKUP_GROUP_ID && text.startsWith('/update')) {
+    // --- 🛠️ ONE-TIME MIGRATION COMMAND: /update (Works in both Database & Backup group) ---
+    if ((chatId === DATABASE_GROUP_ID || chatId === BACKUP_GROUP_ID) && text.startsWith('/update')) {
         try {
-            const fullChat = await ctx.telegram.getChat(BACKUP_GROUP_ID);
-            if (!fullChat.pinned_message) return ctx.reply("🏁 **Update Cancelled!** Group me koi pinned message nahi mila jahan se scan shuru karein.");
+            const statusMsg = await ctx.reply("🔄 **Scanning Backup Group history to build Master JSON...** Please wait...");
+            
+            // Backup group me se last message id track karne ke liye temp message bhej kar delete karna
+            const tempMsg = await ctx.telegram.sendMessage(BACKUP_GROUP_ID, "🔍 Scan Initiated...");
+            const latestMsgId = tempMsg.message_id;
+            await ctx.telegram.deleteMessage(BACKUP_GROUP_ID, tempMsg.message_id).catch(() => null);
 
-            const statusMsg = await ctx.reply("🔄 **Scanning history to build Master JSON...** Please wait...");
-            const latestPinId = fullChat.pinned_message.message_id;
             let restoredCount = 0;
             const scanRange = 10000; 
-            const startId = latestPinId;
-            const endId = Math.max(1, latestPinId - scanRange);
+            const startId = latestMsgId;
+            const endId = Math.max(1, latestMsgId - scanRange);
 
             for (let currentId = startId; currentId >= endId; currentId--) {
                 try {
@@ -477,26 +477,26 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 } catch (e) { continue; }
             }
 
-            // Master JSON File bana kar Pin karna
+            // Master JSON File bana kar Backup Group me Pin karna
             await saveDbToTelegramImmediate();
 
             try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch (e) {}
-            return ctx.reply(`🎉 **Master Update Complete!**\n\n✅ Scanned & Added: **${restoredCount}** records.\n💾 Master File **\`${DB_FILENAME}\`** group me Pin kar di gayi hai!\n\n🚀 Aage se \`/restore\` sirf 2 seconds lega!`);
+            return ctx.reply(`🎉 **Master Update Complete!**\n\n✅ Scanned & Added: **${restoredCount}** records.\n💾 Master File **\`${DB_FILENAME}\`** group me Pin kar di gayi hai!\n\n🚀 Aage se \`/restore\` sirf 2 seconds lega!`, getAdminMenu());
         } catch (updateErr) {
-            return ctx.reply(`❌ **Update Error:** \`${updateErr.message}\``);
+            return ctx.reply(`❌ **Update Error:** \`${updateErr.message}\``, getAdminMenu());
         }
     }
 
-    // --- ⚡ FAST RESTORE COMMAND: /restore ---
-    if (chatId === BACKUP_GROUP_ID && text.startsWith('/restore')) {
+    // --- ⚡ FAST RESTORE COMMAND: /restore (Works in both Database & Backup group) ---
+    if ((chatId === DATABASE_GROUP_ID || chatId === BACKUP_GROUP_ID) && text.startsWith('/restore')) {
         const statusMsg = await ctx.reply("⚡ **Restoring database from Cloud JSON...**");
         const res = await restoreDbFromTelegram();
         try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch (e) {}
 
         if (res.success) {
-            return ctx.reply(`📊 **Fast Restore Complete!**\n\n📚 **Total Loaded Links:** ${res.count}\n⏱️ **Time taken:** ~2 Seconds`);
+            return ctx.reply(`📊 **Fast Restore Complete!**\n\n📚 **Total Loaded Links:** ${res.count}\n⏱️ **Time taken:** ~2 Seconds`, getAdminMenu());
         } else {
-            return ctx.reply(`⚠️ **Restore Failed:** Pinned JSON file nahi mili. Agar pehli baar setup kar rahe hain toh pehle \`/update\` run karein.`);
+            return ctx.reply(`⚠️ **Restore Failed:** Pinned JSON file nahi mili. Pehle \`/update\` run karein.`, getAdminMenu());
         }
     }
 
