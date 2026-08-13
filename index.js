@@ -1,5 +1,6 @@
 const { Telegraf, Markup } = require('telegraf');
 const http = require('http'); 
+const { google } = require('googleapis');
 
 const BOT_TOKEN = '8869980874:AAF2LGQyeHHUoJHOnFAJ7D0U3NCeI1kG1Kg'; 
 const DATABASE_GROUP_ID = -1003927356068; 
@@ -8,7 +9,7 @@ const WEBAPP_URL = 'https://hotpopkornbotwebapp.vercel.app';
 // 📢 Private channel ID
 const PRIVATE_CHANNEL_ID = -1003900661218; 
 
-// 📁 Backup group ID
+// 📁 Backup group ID (For delivery logs & notifications)
 const BACKUP_GROUP_ID = -1004314246888; 
 
 // 👑 ADMIN BYPASS SYSTEM
@@ -20,102 +21,88 @@ const MAIN_CH_LINK = "https://t.me/popkornmovie_1";
 const BACKUP_CH_ID = "-1003900661218";
 const BACKUP_CH_LINK = "https://t.me/+1A7MUa-fD71jNDk1";
 
-const DB_FILENAME = 'files_database.json';
+// 📊 GOOGLE SHEETS CONFIGURATION
+const SPREADSHEET_ID = '1fiz4SGDPI_oXf-W0whhFdAkPe-jsO7z5xWt460muovA';
+
+let sheets = null;
+try {
+    const serviceAccountCredentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    const auth = new google.auth.GoogleAuth({
+        credentials: serviceAccountCredentials,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    sheets = google.sheets({ version: 'v4', auth });
+} catch (err) {
+    console.error("⚠️ GOOGLE_SERVICE_ACCOUNT_JSON setup missing or invalid in Environment Variables!");
+}
 
 const bot = new Telegraf(BOT_TOKEN, {
     handlerTimeout: 900000 
 });
+
 const fileDb = new Map();
 const userStates = new Map();
-
-// 📂 Sent Files Tracker Map (Memory Object for Active Sessions)
-const activeDeliveries = new Map();
-
-// Flag to ensure DB is loaded before allowing any full backup write
-let isDbRestored = false;
 
 // 🚀 ALIVE & PORT FIX
 const PORT = process.env.PORT || 7860;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bot is running safely and alive!');
+    res.end('Bot is running safely with Google Sheets!');
 }).listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 
-// ==================== 📦 JSON CLOUD SYNC SYSTEM ====================
+// ==================== 📊 GOOGLE SHEETS SYNC SYSTEM ====================
 
-// 1. JSON ko Group me Save aur Pin karne ka logic
-let saveTimeout = null;
-async function saveDbToTelegramImmediate() {
+// 1. Startup Par Google Sheet Se Pure Data Load Karein
+async function loadDbFromGoogleSheet() {
+    if (!sheets) {
+        console.error("❌ Google Sheets client is not initialized.");
+        return;
+    }
     try {
-        // 🚨 SAFETY GUARD: Unrestored ya empty DB ko cloud par save karne se rokein
-        if (!isDbRestored && fileDb.size === 0) {
-            console.warn("⚠️ Save blocked: Database has not been restored yet or is empty.");
-            return false;
-        }
-
-        if (fileDb.size === 0) {
-            console.warn("⚠️ Save blocked: fileDb is empty, preventing accidental backup wipe.");
-            return false;
-        }
-
-        const objData = Object.fromEntries(fileDb);
-        const jsonBuffer = Buffer.from(JSON.stringify(objData, null, 2), 'utf-8');
-
-        const sentMsg = await bot.telegram.sendDocument(BACKUP_GROUP_ID, {
-            source: jsonBuffer,
-            filename: DB_FILENAME
-        }, {
-            caption: "📌 **System Database File (Do Not Delete)**\nContains all restored & new file codes.",
-            parse_mode: 'Markdown'
+        console.log("⏳ Syncing database from Google Sheet...");
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'Sheet1!A2:C',
         });
 
-        await bot.telegram.pinChatMessage(BACKUP_GROUP_ID, sentMsg.message_id, { disable_notification: true });
-        console.log(`✅ Database JSON successfully pinned in Backup Group! Total Items: ${fileDb.size}`);
-        return true;
+        const rows = response.data.values;
+        if (rows && rows.length > 0) {
+            fileDb.clear();
+            rows.forEach(row => {
+                if (row[0] && row[1]) {
+                    fileDb.set(row[0].trim(), {
+                        messageId: parseInt(row[1]),
+                        name: row[2] ? row[2].trim() : 'Unnamed File'
+                    });
+                }
+            });
+            console.log(`✅ Google Sheet Sync Complete! Total Records Loaded: ${fileDb.size}`);
+        } else {
+            console.log("ℹ️ Google Sheet is empty or no valid rows found.");
+        }
     } catch (err) {
-        console.error("❌ Error saving JSON DB to Telegram:", err.message);
-        return false;
+        console.error("❌ Google Sheet Read Error:", err.message);
     }
 }
 
-function triggerDbSave() {
-    if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
-        saveDbToTelegramImmediate();
-    }, 5000); // 5 sec debounce timer taaki batch uploads par spam na ho
-}
+// 2. Nayi Entry Ko Real-Time Google Sheet Mein Append Karein
+async function saveToGoogleSheet(param, messageId, fileName) {
+    // Memory RAM Update
+    fileDb.set(param, { messageId, name: fileName });
 
-// 2. Telegram Pinned Message se JSON restore karne ka Fast logic (2 Seconds)
-async function restoreDbFromTelegram() {
+    if (!sheets) return;
     try {
-        const fullChat = await bot.telegram.getChat(BACKUP_GROUP_ID);
-        const pinnedMsg = fullChat.pinned_message;
-
-        if (pinnedMsg && pinnedMsg.document && pinnedMsg.document.file_name === DB_FILENAME) {
-            const fileLink = await bot.telegram.getFileLink(pinnedMsg.document.file_id);
-            
-            // Download JSON using fetch
-            const response = await fetch(fileLink.href);
-            const jsonText = await response.text();
-            const dataObj = JSON.parse(jsonText);
-
-            // Existing entries ko wahi rakhte huye smart merge karein
-            for (const [key, value] of Object.entries(dataObj)) {
-                if (!fileDb.has(key)) {
-                    fileDb.set(key, value);
-                }
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'Sheet1!A:C',
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+                values: [[param, messageId, fileName]]
             }
-
-            isDbRestored = true;
-            console.log(`⚡ Fast Restore Complete! Loaded ${fileDb.size} records from Pinned JSON.`);
-            return { success: true, count: fileDb.size };
-        } else {
-            console.warn("⚠️ No pinned JSON database file found in Backup Group.");
-            return { success: false, count: 0 };
-        }
+        });
+        console.log(`✅ Record Appended to Google Sheet: ${fileName}`);
     } catch (err) {
-        console.error("❌ Error restoring DB from Telegram JSON:", err.message);
-        return { success: false, count: 0, error: err.message };
+        console.error("❌ Google Sheet Append Error:", err.message);
     }
 }
 
@@ -131,22 +118,14 @@ const getAdminMenu = () => {
     ]).resize();
 };
 
-// Helper function: Backup group me log bhejkar pin aur sync karne ke liye
-async function saveToBackup(param, msgId, name, deliveryData = null) {
+// Helper function: Backup group me Delivery Logs bhejane ke liye
+async function saveDeliveryLogToBackup(deliveryData) {
     try {
-        let logText = `DATABASE_LOG:\nPARAM: ${param}\nMSG_ID: ${msgId}\nNAME: ${name}`;
-        if (deliveryData) {
-            logText = `DELIVERY_LOG:\nUSER_CHAT_ID: ${deliveryData.chatId}\nFILE_MSG_ID: ${deliveryData.fileMsgId}\nWARN_MSG_ID: ${deliveryData.warnMsgId}\nTIME: ${Date.now()}`;
-        }
+        const logText = `DELIVERY_LOG:\nUSER_CHAT_ID: ${deliveryData.chatId}\nFILE_MSG_ID: ${deliveryData.fileMsgId}\nWARN_MSG_ID: ${deliveryData.warnMsgId}\nTIME: ${Date.now()}`;
         const sentLog = await bot.telegram.sendMessage(BACKUP_GROUP_ID, logText);
-        
-        // Naye file record banne par JSON auto-update trigger karo
-        if (!deliveryData) {
-            triggerDbSave();
-        }
         return sentLog.message_id;
     } catch (err) {
-        console.error("Backup Save Error:", err.message);
+        console.error("Delivery Log Error:", err.message);
     }
 }
 
@@ -269,7 +248,7 @@ async function deliverFile(ctx, param) {
             const forwardedMsg = await ctx.telegram.forwardMessage(targetChatId, DATABASE_GROUP_ID, fileData.messageId);
             const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies. Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
 
-            const logId = await saveToBackup(null, null, null, {
+            const logId = await saveDeliveryLogToBackup({
                 chatId: targetChatId,
                 fileMsgId: forwardedMsg.message_id,
                 warnMsgId: warningMsg.message_id
@@ -290,7 +269,7 @@ async function deliverFile(ctx, param) {
 }
 
 // 💥 DEDICATED COMMANDS HANDLERS & KEYBOARD INTERCEPTORS
-const handleStatus = (ctx) => ctx.reply(`🟢 **Bot Status:** Alive & Running!\n📚 **Active Loaded Files:** ${fileDb.size}`, { parse_mode: 'Markdown', ...getAdminMenu() });
+const handleStatus = (ctx) => ctx.reply(`🟢 **Bot Status:** Alive & Running!\n📊 **Google Sheet Total Records:** ${fileDb.size}`, { parse_mode: 'Markdown', ...getAdminMenu() });
 
 const handleCancel = (ctx) => {
     const userId = ctx.from.id;
@@ -361,6 +340,16 @@ bot.command('video', handleVideo);
 bot.command('link', handleLinkBatch);
 bot.command('batchinline', handleBatchInline);
 
+// Manual Sync Command for Admin
+bot.command('sync', async (ctx) => {
+    if (ctx.chat.id === DATABASE_GROUP_ID || ctx.chat.id === BACKUP_GROUP_ID) {
+        const msg = await ctx.reply("⏳ Syncing with Google Sheets...");
+        await loadDbFromGoogleSheet();
+        await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(() => null);
+        return ctx.reply(`✅ **Sync Complete!** Total Records Loaded: **${fileDb.size}**`, getAdminMenu());
+    }
+});
+
 // --- TOGGLE CALLBACK HANDLERS ---
 bot.action(/toggle_(480p|720p|1080p)/, async (ctx) => {
     const userId = ctx.from.id;
@@ -412,7 +401,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     const currentState = userId ? userStates.get(userId) : null;
     const chatId = ctx.chat.id;
 
-    // Route Text Menu Buttons to respective handlers
+    // Route Text Menu Buttons
     if (chatId === DATABASE_GROUP_ID) {
         if (text === '🟢 Bot Status') return handleStatus(ctx);
         if (text === '❌ Cancel Operation') return handleCancel(ctx);
@@ -423,9 +412,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         if (text === '🎬 Batch Inline') return handleBatchInline(ctx);
     }
 
-    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link') || text.startsWith('/batchinline')) return;
+    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link') || text.startsWith('/batchinline') || text.startsWith('/sync')) return;
 
-    // --- Delivery Logs scan processing ---
+    // --- Delivery Logs cleanup scan ---
     if (chatId === BACKUP_GROUP_ID && text.startsWith('DELIVERY_LOG:')) {
         try {
             const userChatIdMatch = text.match(/USER_CHAT_ID:\s*(-?\d+)/);
@@ -446,85 +435,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         } catch (e) {}
     }
 
-    // --- 🛠️ OPTIMIZED SILENT SCAN COMMAND: /update ---
-    if ((chatId === DATABASE_GROUP_ID || chatId === BACKUP_GROUP_ID) && text.startsWith('/update')) {
-        try {
-            const statusMsg = await ctx.reply("🔄 **Pre-loading 12 Aug Pinned JSON & scanning missing history...** Please wait...");
-            
-            // Step 1: Pre-load existing pinned database first
-            await restoreDbFromTelegram().catch(() => null);
-
-            // Step 2: Latest message ID check
-            const tempMsg = await ctx.telegram.sendMessage(BACKUP_GROUP_ID, "🔍 Scan Started...");
-            const latestMsgId = tempMsg.message_id;
-            await ctx.telegram.deleteMessage(BACKUP_GROUP_ID, tempMsg.message_id).catch(() => null);
-
-            let restoredCount = 0;
-            let scannedTotal = 0;
-            const scanRange = 10000; 
-            const startId = latestMsgId;
-            const endId = Math.max(1, latestMsgId - scanRange);
-
-            // Step 3: Direct API fetch call without forwardMessage (Fast & Safe)
-            for (let currentId = startId; currentId >= endId; currentId--) {
-                scannedTotal++;
-                try {
-                    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getMessage?chat_id=${BACKUP_GROUP_ID}&message_id=${currentId}`).catch(() => null);
-                    if (res && res.ok) {
-                        const data = await res.json();
-                        if (data.ok && data.result) {
-                            const msgText = data.result.text || data.result.caption || '';
-                            if (msgText.includes('DATABASE_LOG:')) {
-                                const paramMatch = msgText.match(/PARAM:\s*([^\s|]+)/);
-                                const msgIdMatch = msgText.match(/MSG_ID:\s*(\d+)/);
-                                const nameMatch = msgText.match(/NAME:\s*(.+)$/m);
-
-                                if (paramMatch && msgIdMatch && nameMatch) {
-                                    const key = paramMatch[1].trim();
-                                    if (!fileDb.has(key)) {
-                                        fileDb.set(key, { messageId: parseInt(msgIdMatch[1]), name: nameMatch[1].trim() });
-                                        restoredCount++;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (e) { continue; }
-
-                // Periodic Live Progress Update
-                if (scannedTotal % 500 === 0) {
-                    await ctx.telegram.editMessageText(
-                        chatId,
-                        statusMsg.message_id,
-                        null,
-                        `⏳ **Silent Scanning History:** ${scannedTotal}/${scanRange} messages...\n✨ **New Missing Logs Found:** ${restoredCount}\n📚 **Total In Memory:** ${fileDb.size}`
-                    ).catch(() => null);
-                }
-            }
-
-            isDbRestored = true;
-            await saveDbToTelegramImmediate();
-
-            try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch (e) {}
-            return ctx.reply(`🎉 **Master Update Complete!**\n\n✅ Scanned Messages: **${scannedTotal}**\n✨ New Added: **${restoredCount}**\n📚 Total Active Database Records: **${fileDb.size}**\n\n💾 Updated Master File **\`${DB_FILENAME}\`** group me Pin kar di gayi hai!`, getAdminMenu());
-        } catch (updateErr) {
-            return ctx.reply(`❌ **Update Error:** \`${updateErr.message}\``, getAdminMenu());
-        }
-    }
-
-    // --- ⚡ FAST RESTORE COMMAND: /restore ---
-    if ((chatId === DATABASE_GROUP_ID || chatId === BACKUP_GROUP_ID) && text.startsWith('/restore')) {
-        const statusMsg = await ctx.reply("⚡ **Restoring database from Cloud JSON...**");
-        const res = await restoreDbFromTelegram();
-        try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch (e) {}
-
-        if (res.success) {
-            return ctx.reply(`📊 **Fast Restore Complete!**\n\n📚 **Total Loaded Links:** ${res.count}\n⏱️ **Time taken:** ~2 Seconds`, getAdminMenu());
-        } else {
-            return ctx.reply(`⚠️ **Restore Failed:** Pinned JSON file nahi mili. Pehle \`/update\` run karein.`, getAdminMenu());
-        }
-    }
-
     // Main database group ka logic
     if (chatId === DATABASE_GROUP_ID) {
         
@@ -541,7 +451,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             return ctx.reply("🔗 **Send Batch Links:** Ab sabhi quality links sequence me bhejhein...", getAdminMenu());
         }
 
-        // --- BATCH INLINE STATE: AWAITING LINKS & PROCESSING ---
+        // --- BATCH INLINE STATE: AWAITING LINKS ---
         if (currentState && currentState.step === 'AWAITING_BATCH_URLS') {
             const urlRegex = /(https?:\/\/[^\s]+)/gi;
             const foundLinks = text.match(urlRegex);
@@ -557,7 +467,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             }
 
             if (foundLinks.length < finalQualities.length) {
-                return ctx.reply(`❌ Links shortage! Aapne **${finalQualities.length}** qualities select ki thi par sirf **${foundLinks.length}** link(s) diye.`);
+                return ctx.reply(`❌ Links shortage! You selected **${finalQualities.length}** qualities but provided **${foundLinks.length}** link(s).`);
             }
 
             const processMsg = await ctx.reply("⏳ **Generating Batch Posts... Please wait...**");
@@ -579,8 +489,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                     const encodedParam = Buffer.from(msgIdStr).toString('base64url');
                     const trackerName = `Batch Inline [${currentQuality}] - Msg ID: ${msgIdStr}`;
 
-                    fileDb.set(encodedParam, { messageId: finalPost.message_id, name: trackerName });
-                    await saveToBackup(encodedParam, finalPost.message_id, trackerName);
+                    // Save to Google Sheet
+                    await saveToGoogleSheet(encodedParam, finalPost.message_id, trackerName);
 
                     const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                     outputLinksList.push(`🍿 **${currentQuality}:** \`${finalBotLink}\``);
@@ -599,7 +509,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             });
         }
 
-        // --- OLD BATCH LINK PROCESSING LOGIC ---
+        // --- BATCH LINK PROCESSING LOGIC ---
         if (currentState && currentState.step === 'AWAITING_BATCH_LINKS') {
             const urlRegex = /(https?:\/\/[^\s]+)/gi;
             const foundLinks = text.match(urlRegex);
@@ -623,8 +533,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                     const encodedParam = Buffer.from(msgIdStr).toString('base64url');
                     const dummyName = `Text Link Post #${msgIdStr}`;
 
-                    fileDb.set(encodedParam, { messageId: textPost.message_id, name: dummyName });
-                    await saveToBackup(encodedParam, textPost.message_id, dummyName);
+                    // Save to Google Sheet
+                    await saveToGoogleSheet(encodedParam, textPost.message_id, dummyName);
 
                     const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                     outputLinksList.push(`🔗 **Link ${i+1}:** \`${finalBotLink}\``);
@@ -652,11 +562,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             const msgIdStr = message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
-            fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
-            
-            process.nextTick(async () => {
-                await saveToBackup(encodedParam, message.message_id, fileName);
-            });
+            // Save to Google Sheet
+            await saveToGoogleSheet(encodedParam, message.message_id, fileName);
 
             if (userId) userStates.delete(userId); 
 
@@ -702,11 +609,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 const msgIdStr = finalPost.message_id.toString();
                 const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
-                fileDb.set(encodedParam, { messageId: finalPost.message_id, name: fileData.fileName });
-                
-                process.nextTick(async () => {
-                    await saveToBackup(encodedParam, finalPost.message_id, fileData.fileName);
-                });
+                // Save to Google Sheet
+                await saveToGoogleSheet(encodedParam, finalPost.message_id, fileData.fileName);
 
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                 if (userId) userStates.set(userId, { step: 'COMPLETED', fileId: fileData.fileId, fileType: fileData.fileType, lastTrackedLink: botLink });
@@ -741,11 +645,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             const msgIdStr = message.message_id.toString();
             const encodedParam = Buffer.from(msgIdStr).toString('base64url');
 
-            fileDb.set(encodedParam, { messageId: message.message_id, name: fileName });
-            
-            process.nextTick(async () => {
-                await saveToBackup(encodedParam, message.message_id, fileName);
-            });
+            // Save to Google Sheet
+            await saveToGoogleSheet(encodedParam, message.message_id, fileName);
 
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **File Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
@@ -767,12 +668,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     }
 });
 
-// ⚡ PRE-LOAD DATABASE FROM TELEGRAM BEFORE LAUNCHING BOT
-(async () => {
-    console.log("🔍 Pre-loading 12 Aug JSON database before bot launch...");
-    await restoreDbFromTelegram();
-    
-    bot.launch().then(() => {
-        console.log("Hotpopkornbot is now online and safely restored...");
-    });
-})();
+// Bot launch trigger with Google Sheets initial load
+bot.launch().then(async () => {
+    console.log("Hotpopkornbot is now online...");
+    await loadDbFromGoogleSheet();
+});
