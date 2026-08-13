@@ -52,7 +52,6 @@ http.createServer((req, res) => {
 
 // ==================== 📊 GOOGLE SHEETS SYNC SYSTEM ====================
 
-// Startup Par Google Sheet Se Pure Data Load Karein
 async function loadDbFromGoogleSheet() {
     if (!sheets) {
         console.error("❌ Google Sheets client is not initialized.");
@@ -85,7 +84,6 @@ async function loadDbFromGoogleSheet() {
     }
 }
 
-// Entry Ko Real-Time Google Sheet Mein Append Karein
 async function saveToGoogleSheet(param, messageId, fileName) {
     fileDb.set(param, { messageId, name: fileName });
 
@@ -201,21 +199,21 @@ bot.action(/check_join_(.+)/, async (ctx) => {
     await deliverFile(ctx, param);
 });
 
-// 📦 CORE FILE DELIVERY LOGIC (FIXED)
+// 📦 FIXED DELIVERY SYSTEM
 async function deliverFile(ctx, param) {
     const targetChatId = ctx.chat.id;
     
-    // Clean string param for map/sheet lookup
+    // Clean key for mapping
     const cleanParam = param.replace('getfile_', '').trim();
     let fileData = fileDb.get(cleanParam);
 
-    // Fallback: Agar RAM me missing hai, Google Sheet refresh karke check karein
+    // Sheet Fallback Auto-fetch
     if (!fileData) {
         await loadDbFromGoogleSheet();
         fileData = fileDb.get(cleanParam);
     }
 
-    // STEP 1: Jab user bina 'getfile_' wale normal link par click karta hai (Web App Trigger)
+    // CASE 1: Step 1 Link Clicked (Generates WebApp button to open Downloader)
     if (!param.startsWith('getfile_')) {
         const webAppFinalUrl = `${WEBAPP_URL}?fid=${cleanParam}`;
 
@@ -235,7 +233,7 @@ async function deliverFile(ctx, param) {
             } catch (err) {}
         }, 120000);
     }
-    // STEP 2: Jab user WebApp se unlock hoke wapas 'getfile_' param ke sath aata hai (Direct File Delivery)
+    // CASE 2: Step 2 Link Clicked (User returns from WebApp with 'getfile_')
     else {
         if (!fileData) {
             return ctx.reply("❌ Link expired or invalid! Please get a new link from the channel.");
@@ -243,6 +241,8 @@ async function deliverFile(ctx, param) {
 
         try {
             await ctx.reply("🚀 Processing your secure link... Sending file...⌛⏳");
+            
+            // Database group se exact media / post forward kar do
             const forwardedMsg = await ctx.telegram.forwardMessage(targetChatId, DATABASE_GROUP_ID, fileData.messageId);
             const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies. Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
 
@@ -477,7 +477,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
                     await saveToGoogleSheet(encodedParam, finalPost.message_id, trackerName);
 
-                    // NORMAL LINK GENERATE (Step 1)
+                    // Step 1 Channel Share Link
                     const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                     outputLinksList.push(`🍿 **${currentQuality}:** \`${finalBotLink}\``);
 
@@ -509,9 +509,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             for (let i = 0; i < foundLinks.length; i++) {
                 const targetUrl = foundLinks[i];
                 try {
-                    const textPost = await ctx.telegram.sendMessage(chatId, `✨ **YOUR REQUESTED FILE IS READY!**\n\n🔒 *Your secure download link has been generated successfully. Click the button below to open the downloader and unlock your file.*`, {
-                        parse_mode: 'Markdown',
-                        ...Markup.inlineKeyboard([[Markup.button.url('🍿 Download/Watch online', targetUrl)]])
+                    // Database me exact target URL wala clean message send karo
+                    const textPost = await ctx.telegram.sendMessage(chatId, `🍿 **Your Direct Link:**\n\n${targetUrl}`, {
+                        parse_mode: 'Markdown'
                     });
 
                     const msgIdStr = textPost.message_id.toString();
@@ -520,7 +520,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
                     await saveToGoogleSheet(encodedParam, textPost.message_id, dummyName);
 
-                    // NORMAL LINK GENERATE (Step 1)
+                    // Step 1 Link (Is se pehle WebApp trigger hoga)
                     const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                     outputLinksList.push(`🔗 **Link ${i+1}:** \`${finalBotLink}\``);
 
@@ -551,7 +551,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             if (userId) userStates.delete(userId); 
 
-            // NORMAL LINK GENERATE (Step 1)
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **Video Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                 reply_to_message_id: message.message_id,
@@ -565,7 +564,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             let fileName = currentFileObj.file_name || "Requested File";
             let fileId = currentFileObj.file_id;
-            let fileType = message.document ? "document" : message.video ? "video" : message.audio ? "audio" : message.animation ? "photo";
+            let fileType = message.document ? "document" : message.video ? "video" : message.audio ? "audio" : message.animation ? "animation" : "photo";
 
             if (userId) {
                 userStates.set(userId, { step: 'AWAITING_LINK', fileId, fileType, fileName, caption: message.caption || "" });
@@ -596,7 +595,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
                 await saveToGoogleSheet(encodedParam, finalPost.message_id, fileData.fileName);
 
-                // NORMAL LINK GENERATE (Step 1)
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                 if (userId) userStates.set(userId, { step: 'COMPLETED', fileId: fileData.fileId, fileType: fileData.fileType, lastTrackedLink: botLink });
 
@@ -632,7 +630,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             await saveToGoogleSheet(encodedParam, message.message_id, fileName);
 
-            // NORMAL LINK GENERATE (Step 1)
             const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **File Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                 reply_to_message_id: message.message_id,
