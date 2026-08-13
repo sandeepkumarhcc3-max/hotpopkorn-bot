@@ -31,7 +31,7 @@ const userStates = new Map();
 // 📂 Sent Files Tracker Map (Memory Object for Active Sessions)
 const activeDeliveries = new Map();
 
-// Flag to ensure DB is restored before allowing overwrites
+// Flag to ensure DB is loaded before allowing any full backup write
 let isDbRestored = false;
 
 // 🚀 ALIVE & PORT FIX
@@ -47,7 +47,7 @@ http.createServer((req, res) => {
 let saveTimeout = null;
 async function saveDbToTelegramImmediate() {
     try {
-        // 🚨 SAFETY GUARD: Khali ya unrestored DB ko cloud par save karne se rokein
+        // 🚨 SAFETY GUARD: Unrestored ya empty DB ko cloud par save karne se rokein
         if (!isDbRestored && fileDb.size === 0) {
             console.warn("⚠️ Save blocked: Database has not been restored yet or is empty.");
             return false;
@@ -82,10 +82,10 @@ function triggerDbSave() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
         saveDbToTelegramImmediate();
-    }, 5000); // 5 sec debounce timer
+    }, 5000); // 5 sec debounce timer taaki batch uploads par spam na ho
 }
 
-// 2. Telegram Pinned Message se JSON restore karne ka Fast logic
+// 2. Telegram Pinned Message se JSON restore karne ka Fast logic (2 Seconds)
 async function restoreDbFromTelegram() {
     try {
         const fullChat = await bot.telegram.getChat(BACKUP_GROUP_ID);
@@ -99,7 +99,7 @@ async function restoreDbFromTelegram() {
             const jsonText = await response.text();
             const dataObj = JSON.parse(jsonText);
 
-            // Existing entries ko bina wahi delete kiye smart merge karein
+            // Existing entries ko wahi rakhte huye smart merge karein
             for (const [key, value] of Object.entries(dataObj)) {
                 if (!fileDb.has(key)) {
                     fileDb.set(key, value);
@@ -446,15 +446,15 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         } catch (e) {}
     }
 
-    // --- 🛠️ OPTIMIZED SILENT MIGRATION COMMAND: /update ---
+    // --- 🛠️ OPTIMIZED SILENT SCAN COMMAND: /update ---
     if ((chatId === DATABASE_GROUP_ID || chatId === BACKUP_GROUP_ID) && text.startsWith('/update')) {
         try {
-            const statusMsg = await ctx.reply("🔄 **Pre-loading existing JSON & initiating silent scan...** Please wait...");
+            const statusMsg = await ctx.reply("🔄 **Pre-loading 12 Aug Pinned JSON & scanning missing history...** Please wait...");
             
-            // Step 1: Pre-load existing pinned database
+            // Step 1: Pre-load existing pinned database first
             await restoreDbFromTelegram().catch(() => null);
 
-            // Step 2: Get highest message ID safely
+            // Step 2: Latest message ID check
             const tempMsg = await ctx.telegram.sendMessage(BACKUP_GROUP_ID, "🔍 Scan Started...");
             const latestMsgId = tempMsg.message_id;
             await ctx.telegram.deleteMessage(BACKUP_GROUP_ID, tempMsg.message_id).catch(() => null);
@@ -465,7 +465,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             const startId = latestMsgId;
             const endId = Math.max(1, latestMsgId - scanRange);
 
-            // Step 3: Fast silent scan using raw HTTP fetch without forwardMessage
+            // Step 3: Direct API fetch call without forwardMessage (Fast & Safe)
             for (let currentId = startId; currentId >= endId; currentId--) {
                 scannedTotal++;
                 try {
@@ -491,13 +491,13 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                     }
                 } catch (e) { continue; }
 
-                // Live status update every 500 messages
+                // Periodic Live Progress Update
                 if (scannedTotal % 500 === 0) {
                     await ctx.telegram.editMessageText(
                         chatId,
                         statusMsg.message_id,
                         null,
-                        `⏳ **Silent Scanning History:** ${scannedTotal}/${scanRange} messages...\n✨ **New Records Found:** ${restoredCount}\n📚 **Total In Memory:** ${fileDb.size}`
+                        `⏳ **Silent Scanning History:** ${scannedTotal}/${scanRange} messages...\n✨ **New Missing Logs Found:** ${restoredCount}\n📚 **Total In Memory:** ${fileDb.size}`
                     ).catch(() => null);
                 }
             }
@@ -506,7 +506,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             await saveDbToTelegramImmediate();
 
             try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch (e) {}
-            return ctx.reply(`🎉 **Master Silent Update Complete!**\n\n✅ Scanned Messages: **${scannedTotal}**\n✨ New Added: **${restoredCount}**\n📚 Total Active Database Records: **${fileDb.size}**\n\n💾 Updated Master File **\`${DB_FILENAME}\`** group me Pin kar di gayi hai!`, getAdminMenu());
+            return ctx.reply(`🎉 **Master Update Complete!**\n\n✅ Scanned Messages: **${scannedTotal}**\n✨ New Added: **${restoredCount}**\n📚 Total Active Database Records: **${fileDb.size}**\n\n💾 Updated Master File **\`${DB_FILENAME}\`** group me Pin kar di gayi hai!`, getAdminMenu());
         } catch (updateErr) {
             return ctx.reply(`❌ **Update Error:** \`${updateErr.message}\``, getAdminMenu());
         }
@@ -705,7 +705,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 fileDb.set(encodedParam, { messageId: finalPost.message_id, name: fileData.fileName });
                 
                 process.nextTick(async () => {
-                    await saveToBackup(encodedParam, fileData.fileName);
+                    await saveToBackup(encodedParam, finalPost.message_id, fileData.fileName);
                 });
 
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
@@ -767,9 +767,9 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     }
 });
 
-// ⚡ STRICT STARTUP BLOCKING RESTORE & LAUNCH
+// ⚡ PRE-LOAD DATABASE FROM TELEGRAM BEFORE LAUNCHING BOT
 (async () => {
-    console.log("🔍 Pre-loading database from cloud JSON before starting bot...");
+    console.log("🔍 Pre-loading 12 Aug JSON database before bot launch...");
     await restoreDbFromTelegram();
     
     bot.launch().then(() => {
