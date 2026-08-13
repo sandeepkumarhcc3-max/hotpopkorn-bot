@@ -52,7 +52,7 @@ http.createServer((req, res) => {
 
 // ==================== 📊 GOOGLE SHEETS SYNC SYSTEM ====================
 
-// 1. Startup Par Google Sheet Se Pure Data Load Karein
+// Startup Par Google Sheet Se Pure Data Load Karein
 async function loadDbFromGoogleSheet() {
     if (!sheets) {
         console.error("❌ Google Sheets client is not initialized.");
@@ -85,7 +85,7 @@ async function loadDbFromGoogleSheet() {
     }
 }
 
-// 2. Nayi Entry Ko Real-Time Google Sheet Mein Append Karein
+// Entry Ko Real-Time Google Sheet Mein Append Karein
 async function saveToGoogleSheet(param, messageId, fileName) {
     fileDb.set(param, { messageId, name: fileName });
 
@@ -107,7 +107,6 @@ async function saveToGoogleSheet(param, messageId, fileName) {
 
 // ====================================================================
 
-// 🛠️ Permanent Keyboard Menu Helper for Database Group
 const getAdminMenu = () => {
     return Markup.keyboard([
         ['🖼️ Inline Post', '🎬 Batch Inline'],
@@ -202,24 +201,21 @@ bot.action(/check_join_(.+)/, async (ctx) => {
     await deliverFile(ctx, param);
 });
 
-// 📦 File delivery logic
+// 📦 CORE FILE DELIVERY LOGIC (FIXED)
 async function deliverFile(ctx, param) {
     const targetChatId = ctx.chat.id;
     
-    // Clean string param for map retrieval
+    // Clean string param for map/sheet lookup
     const cleanParam = param.replace('getfile_', '').trim();
     let fileData = fileDb.get(cleanParam);
 
-    // Fallback: Agar memory reset hui ho toh Google Sheet se refresh karke recheck karein
+    // Fallback: Agar RAM me missing hai, Google Sheet refresh karke check karein
     if (!fileData) {
         await loadDbFromGoogleSheet();
         fileData = fileDb.get(cleanParam);
     }
 
-    if (!fileData) {
-        return ctx.reply("❌ Link expired or invalid! Please get a new link from the channel.");
-    }
-
+    // STEP 1: Jab user bina 'getfile_' wale normal link par click karta hai (Web App Trigger)
     if (!param.startsWith('getfile_')) {
         const webAppFinalUrl = `${WEBAPP_URL}?fid=${cleanParam}`;
 
@@ -239,7 +235,12 @@ async function deliverFile(ctx, param) {
             } catch (err) {}
         }, 120000);
     }
+    // STEP 2: Jab user WebApp se unlock hoke wapas 'getfile_' param ke sath aata hai (Direct File Delivery)
     else {
+        if (!fileData) {
+            return ctx.reply("❌ Link expired or invalid! Please get a new link from the channel.");
+        }
+
         try {
             await ctx.reply("🚀 Processing your secure link... Sending file...⌛⏳");
             const forwardedMsg = await ctx.telegram.forwardMessage(targetChatId, DATABASE_GROUP_ID, fileData.messageId);
@@ -265,7 +266,7 @@ async function deliverFile(ctx, param) {
     }
 }
 
-// Command handlers
+// Handlers
 const handleStatus = (ctx) => ctx.reply(`🟢 **Bot Status:** Alive & Running!\n📊 **Google Sheet Total Records:** ${fileDb.size}`, { parse_mode: 'Markdown', ...getAdminMenu() });
 
 const handleCancel = (ctx) => {
@@ -476,7 +477,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
                     await saveToGoogleSheet(encodedParam, finalPost.message_id, trackerName);
 
-                    const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=getfile_${encodedParam}`;
+                    // NORMAL LINK GENERATE (Step 1)
+                    const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                     outputLinksList.push(`🍿 **${currentQuality}:** \`${finalBotLink}\``);
 
                 } catch (err) {
@@ -518,7 +520,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
                     await saveToGoogleSheet(encodedParam, textPost.message_id, dummyName);
 
-                    const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=getfile_${encodedParam}`;
+                    // NORMAL LINK GENERATE (Step 1)
+                    const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                     outputLinksList.push(`🔗 **Link ${i+1}:** \`${finalBotLink}\``);
 
                 } catch (linkErr) {
@@ -548,7 +551,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             if (userId) userStates.delete(userId); 
 
-            const botLink = `https://t.me/${ctx.botInfo.username}?start=getfile_${encodedParam}`;
+            // NORMAL LINK GENERATE (Step 1)
+            const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **Video Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                 reply_to_message_id: message.message_id,
                 parse_mode: 'Markdown',
@@ -561,7 +565,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             let fileName = currentFileObj.file_name || "Requested File";
             let fileId = currentFileObj.file_id;
-            let fileType = message.document ? "document" : message.video ? "video" : message.audio ? "audio" : message.animation ? "animation" : "photo";
+            let fileType = message.document ? "document" : message.video ? "video" : message.audio ? "audio" : message.animation ? "photo";
 
             if (userId) {
                 userStates.set(userId, { step: 'AWAITING_LINK', fileId, fileType, fileName, caption: message.caption || "" });
@@ -592,7 +596,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
                 await saveToGoogleSheet(encodedParam, finalPost.message_id, fileData.fileName);
 
-                const botLink = `https://t.me/${ctx.botInfo.username}?start=getfile_${encodedParam}`;
+                // NORMAL LINK GENERATE (Step 1)
+                const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                 if (userId) userStates.set(userId, { step: 'COMPLETED', fileId: fileData.fileId, fileType: fileData.fileType, lastTrackedLink: botLink });
 
                 return ctx.reply(`✅ **Inline Post Created & Tracked Successfully!**\n\n📂 **Name:** ${fileData.fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { reply_to_message_id: finalPost.message_id, parse_mode: 'Markdown', ...getAdminMenu() });
@@ -627,7 +632,8 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             await saveToGoogleSheet(encodedParam, message.message_id, fileName);
 
-            const botLink = `https://t.me/${ctx.botInfo.username}?start=getfile_${encodedParam}`;
+            // NORMAL LINK GENERATE (Step 1)
+            const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
             return ctx.reply(`✅ **File Tracked Successfully!**\n\n📂 **Name:** ${fileName}\n\n🔗 **Post Link for Channel:**\n\`${botLink}\``, { 
                 reply_to_message_id: message.message_id,
                 parse_mode: 'Markdown',
