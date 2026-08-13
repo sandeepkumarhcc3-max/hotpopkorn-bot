@@ -50,12 +50,13 @@ http.createServer((req, res) => {
     res.end('Bot is running safely with Google Sheets!');
 }).listen(PORT, () => console.log(`Server listening on port ${PORT}`));
 
-// ==================== 📊 GOOGLE SHEETS SYNC SYSTEM ====================
+// ==================== 📊 GOOGLE SHEETS SYNC & RESTORE SYSTEM ====================
 
+// Startup & Restore Command ke liye Google Sheet Se Pure Data Load Karein
 async function loadDbFromGoogleSheet() {
     if (!sheets) {
         console.error("❌ Google Sheets client is not initialized.");
-        return;
+        return 0;
     }
     try {
         console.log("⏳ Syncing database from Google Sheet...");
@@ -66,7 +67,7 @@ async function loadDbFromGoogleSheet() {
 
         const rows = response.data.values;
         if (rows && rows.length > 0) {
-            fileDb.clear();
+            fileDb.clear(); // Safe Reset for Clean Reload
             rows.forEach(row => {
                 if (row[0] && row[1]) {
                     fileDb.set(row[0].trim(), {
@@ -76,11 +77,14 @@ async function loadDbFromGoogleSheet() {
                 }
             });
             console.log(`✅ Google Sheet Sync Complete! Total Records Loaded: ${fileDb.size}`);
+            return fileDb.size;
         } else {
             console.log("ℹ️ Google Sheet is empty or no valid rows found.");
+            return 0;
         }
     } catch (err) {
         console.error("❌ Google Sheet Read Error:", err.message);
+        return -1;
     }
 }
 
@@ -110,7 +114,7 @@ const getAdminMenu = () => {
         ['🖼️ Inline Post', '🎬 Batch Inline'],
         ['🚀 Send Video', '🔗 Batch Links'],
         ['✏️ Forward Post', '❌ Cancel Operation'],
-        ['🟢 Bot Status']
+        ['🟢 Bot Status', '🔄 Restore Links']
     ]).resize();
 };
 
@@ -199,21 +203,18 @@ bot.action(/check_join_(.+)/, async (ctx) => {
     await deliverFile(ctx, param);
 });
 
-// 📦 FIXED DELIVERY SYSTEM
+// 📦 CORE FILE DELIVERY LOGIC
 async function deliverFile(ctx, param) {
     const targetChatId = ctx.chat.id;
     
-    // Clean key for mapping
     const cleanParam = param.replace('getfile_', '').trim();
     let fileData = fileDb.get(cleanParam);
 
-    // Sheet Fallback Auto-fetch
     if (!fileData) {
         await loadDbFromGoogleSheet();
         fileData = fileDb.get(cleanParam);
     }
 
-    // CASE 1: Step 1 Link Clicked (Generates WebApp button to open Downloader)
     if (!param.startsWith('getfile_')) {
         const webAppFinalUrl = `${WEBAPP_URL}?fid=${cleanParam}`;
 
@@ -233,7 +234,6 @@ async function deliverFile(ctx, param) {
             } catch (err) {}
         }, 120000);
     }
-    // CASE 2: Step 2 Link Clicked (User returns from WebApp with 'getfile_')
     else {
         if (!fileData) {
             return ctx.reply("❌ Link expired or invalid! Please get a new link from the channel.");
@@ -242,7 +242,6 @@ async function deliverFile(ctx, param) {
         try {
             await ctx.reply("🚀 Processing your secure link... Sending file...⌛⏳");
             
-            // Database group se exact media / post forward kar do
             const forwardedMsg = await ctx.telegram.forwardMessage(targetChatId, DATABASE_GROUP_ID, fileData.messageId);
             const warningMsg = await ctx.reply("⚠️ **IMPORTANT NOTICE:**\n\nThis file will be automatically deleted in **30 minutes** due to copyright policies. Please forward it to a chat or save the message.", { parse_mode: 'Markdown' });
 
@@ -267,7 +266,22 @@ async function deliverFile(ctx, param) {
 }
 
 // Handlers
-const handleStatus = (ctx) => ctx.reply(`🟢 **Bot Status:** Alive & Running!\n📊 **Google Sheet Total Records:** ${fileDb.size}`, { parse_mode: 'Markdown', ...getAdminMenu() });
+const handleStatus = (ctx) => ctx.reply(`🟢 **Bot Status:** Alive & Running!\n📊 **Google Sheet Total Records Loaded:** ${fileDb.size}`, { parse_mode: 'Markdown', ...getAdminMenu() });
+
+// 🔄 RESTORE FUNCTION (NEW)
+const handleRestore = async (ctx) => {
+    if (ctx.chat.id === DATABASE_GROUP_ID || ADMIN_IDS.includes(ctx.from?.id)) {
+        const msg = await ctx.reply("⏳ **Restoring all links from Google Sheet... Please wait.**");
+        const count = await loadDbFromGoogleSheet();
+        await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(() => null);
+        
+        if (count >= 0) {
+            return ctx.reply(`✅ **RESTORE COMPLETE!**\n\n📊 Total **${count}** uploaded links restored successfully into memory. All old links are now live!`, getAdminMenu());
+        } else {
+            return ctx.reply(`❌ **Restore Failed!** Please check Google Sheets Credentials in environment variables.`, getAdminMenu());
+        }
+    }
+};
 
 const handleCancel = (ctx) => {
     const userId = ctx.from.id;
@@ -329,22 +343,16 @@ const handleBatchInline = (ctx) => {
     }
 };
 
+// Registered Commands
 bot.command('status', handleStatus);
+bot.command('restore', handleRestore); // 👈 /restore Command Active
+bot.command('sync', handleRestore);    // 👈 /sync Command
 bot.command('cancel', handleCancel);
 bot.command('inline', handleInline);
 bot.command('forward', handleForward);
 bot.command('video', handleVideo);
 bot.command('link', handleLinkBatch);
 bot.command('batchinline', handleBatchInline);
-
-bot.command('sync', async (ctx) => {
-    if (ctx.chat.id === DATABASE_GROUP_ID || ctx.chat.id === BACKUP_GROUP_ID) {
-        const msg = await ctx.reply("⏳ Syncing with Google Sheets...");
-        await loadDbFromGoogleSheet();
-        await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(() => null);
-        return ctx.reply(`✅ **Sync Complete!** Total Records Loaded: **${fileDb.size}**`, getAdminMenu());
-    }
-});
 
 bot.action(/toggle_(480p|720p|1080p)/, async (ctx) => {
     const userId = ctx.from.id;
@@ -396,6 +404,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
     if (chatId === DATABASE_GROUP_ID) {
         if (text === '🟢 Bot Status') return handleStatus(ctx);
+        if (text === '🔄 Restore Links') return handleRestore(ctx); // 👈 Button Handler Added
         if (text === '❌ Cancel Operation') return handleCancel(ctx);
         if (text === '🖼️ Inline Post') return handleInline(ctx);
         if (text === '✏️ Forward Post') return handleForward(ctx);
@@ -404,7 +413,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         if (text === '🎬 Batch Inline') return handleBatchInline(ctx);
     }
 
-    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link') || text.startsWith('/batchinline') || text.startsWith('/sync')) return;
+    if (text.startsWith('/inline') || text.startsWith('/video') || text.startsWith('/forward') || text.startsWith('/cancel') || text.startsWith('/status') || text.startsWith('/link') || text.startsWith('/batchinline') || text.startsWith('/sync') || text.startsWith('/restore')) return;
 
     if (chatId === BACKUP_GROUP_ID && text.startsWith('DELIVERY_LOG:')) {
         try {
@@ -477,7 +486,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
                     await saveToGoogleSheet(encodedParam, finalPost.message_id, trackerName);
 
-                    // Step 1 Channel Share Link
                     const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                     outputLinksList.push(`🍿 **${currentQuality}:** \`${finalBotLink}\``);
 
@@ -509,7 +517,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             for (let i = 0; i < foundLinks.length; i++) {
                 const targetUrl = foundLinks[i];
                 try {
-                    // Database me exact target URL wala clean message send karo
                     const textPost = await ctx.telegram.sendMessage(chatId, `🍿 **Your Direct Link:**\n\n${targetUrl}`, {
                         parse_mode: 'Markdown'
                     });
@@ -520,7 +527,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
                     await saveToGoogleSheet(encodedParam, textPost.message_id, dummyName);
 
-                    // Step 1 Link (Is se pehle WebApp trigger hoga)
                     const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
                     outputLinksList.push(`🔗 **Link ${i+1}:** \`${finalBotLink}\``);
 
@@ -652,5 +658,5 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
 bot.launch().then(async () => {
     console.log("Hotpopkornbot is now online...");
-    await loadDbFromGoogleSheet();
+    await loadDbFromGoogleSheet(); // Auto Restore on Startup
 });
