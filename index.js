@@ -446,21 +446,26 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         } catch (e) {}
     }
 
-    // --- 🛠️ ONE-TIME MIGRATION COMMAND: /update ---
+    // --- 🛠️ OPTIMIZED ONE-TIME MIGRATION COMMAND: /update ---
     if ((chatId === DATABASE_GROUP_ID || chatId === BACKUP_GROUP_ID) && text.startsWith('/update')) {
         try {
-            const statusMsg = await ctx.reply("🔄 **Scanning Backup Group history to build Master JSON...** Please wait...");
+            const statusMsg = await ctx.reply("🔄 **Pre-loading existing JSON and scanning history...** Please wait...");
             
+            // Step 1: Pre-load existing pinned database first
+            await restoreDbFromTelegram().catch(() => null);
+
             const tempMsg = await ctx.telegram.sendMessage(BACKUP_GROUP_ID, "🔍 Scan Initiated...");
             const latestMsgId = tempMsg.message_id;
             await ctx.telegram.deleteMessage(BACKUP_GROUP_ID, tempMsg.message_id).catch(() => null);
 
             let restoredCount = 0;
+            let scannedTotal = 0;
             const scanRange = 10000; 
             const startId = latestMsgId;
             const endId = Math.max(1, latestMsgId - scanRange);
 
             for (let currentId = startId; currentId >= endId; currentId--) {
+                scannedTotal++;
                 try {
                     const msg = await ctx.telegram.forwardMessage(DATABASE_GROUP_ID, BACKUP_GROUP_ID, currentId).catch(() => null);
                     if (msg) {
@@ -482,13 +487,23 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                         }
                     }
                 } catch (e) { continue; }
+
+                // Live status update every 500 messages
+                if (scannedTotal % 500 === 0) {
+                    await ctx.telegram.editMessageText(
+                        chatId,
+                        statusMsg.message_id,
+                        null,
+                        `⏳ **Scanning History:** ${scannedTotal}/${scanRange} messages...\n✨ **New Records Found:** ${restoredCount}\n📚 **Total In Memory:** ${fileDb.size}`
+                    ).catch(() => null);
+                }
             }
 
             isDbRestored = true;
             await saveDbToTelegramImmediate();
 
             try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch (e) {}
-            return ctx.reply(`🎉 **Master Update Complete!**\n\n✅ Scanned & Added: **${restoredCount}** records.\n💾 Master File **\`${DB_FILENAME}\`** group me Pin kar di gayi hai!`, getAdminMenu());
+            return ctx.reply(`🎉 **Master Update Complete!**\n\n✅ Scanned Messages: **${scannedTotal}**\n✨ New Added: **${restoredCount}**\n📚 Total Active Database Records: **${fileDb.size}**\n\n💾 Master File **\`${DB_FILENAME}\`** group me Pin kar di gayi hai!`, getAdminMenu());
         } catch (updateErr) {
             return ctx.reply(`❌ **Update Error:** \`${updateErr.message}\``, getAdminMenu());
         }
