@@ -31,6 +31,9 @@ const userStates = new Map();
 // 📂 Sent Files Tracker Map (Memory Object for Active Sessions)
 const activeDeliveries = new Map();
 
+// Flag to ensure DB is restored before allowing overwrites
+let isDbRestored = false;
+
 // 🚀 ALIVE & PORT FIX
 const PORT = process.env.PORT || 7860;
 http.createServer((req, res) => {
@@ -44,6 +47,17 @@ http.createServer((req, res) => {
 let saveTimeout = null;
 async function saveDbToTelegramImmediate() {
     try {
+        // 🚨 SAFETY GUARD: Khali ya unrestored DB ko cloud par save karne se rokein
+        if (!isDbRestored && fileDb.size === 0) {
+            console.warn("⚠️ Save blocked: Database has not been restored yet or is empty.");
+            return false;
+        }
+
+        if (fileDb.size === 0) {
+            console.warn("⚠️ Save blocked: fileDb is empty, preventing accidental backup wipe.");
+            return false;
+        }
+
         const objData = Object.fromEntries(fileDb);
         const jsonBuffer = Buffer.from(JSON.stringify(objData, null, 2), 'utf-8');
 
@@ -68,10 +82,10 @@ function triggerDbSave() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
         saveDbToTelegramImmediate();
-    }, 5000); // 5 sec debounce timer taaki batch uploads par spam na ho
+    }, 5000); // 5 sec debounce timer
 }
 
-// 2. Telegram Pinned Message se JSON restore karne ka Fast logic (2 Seconds)
+// 2. Telegram Pinned Message se JSON restore karne ka Fast logic
 async function restoreDbFromTelegram() {
     try {
         const fullChat = await bot.telegram.getChat(BACKUP_GROUP_ID);
@@ -85,11 +99,14 @@ async function restoreDbFromTelegram() {
             const jsonText = await response.text();
             const dataObj = JSON.parse(jsonText);
 
-            fileDb.clear();
+            // Existing entries ko bina wahi delete kiye smart merge karein
             for (const [key, value] of Object.entries(dataObj)) {
-                fileDb.set(key, value);
+                if (!fileDb.has(key)) {
+                    fileDb.set(key, value);
+                }
             }
 
+            isDbRestored = true;
             console.log(`⚡ Fast Restore Complete! Loaded ${fileDb.size} records from Pinned JSON.`);
             return { success: true, count: fileDb.size };
         } else {
@@ -272,12 +289,6 @@ async function deliverFile(ctx, param) {
     }
 }
 
-// 🔄 RECALL CLEANUP LOGIC
-async function runActiveCleanup() {
-    console.log("🔍 Pre-loading database from cloud JSON...");
-    await restoreDbFromTelegram();
-}
-
 // 💥 DEDICATED COMMANDS HANDLERS & KEYBOARD INTERCEPTORS
 const handleStatus = (ctx) => ctx.reply(`🟢 **Bot Status:** Alive & Running!\n📚 **Active Loaded Files:** ${fileDb.size}`, { parse_mode: 'Markdown', ...getAdminMenu() });
 
@@ -330,11 +341,9 @@ const handleLinkBatch = (ctx) => {
     }
 };
 
-// --- NEW HANDLER FOR BATCH INLINE ---
 const handleBatchInline = (ctx) => {
     const userId = ctx.from.id;
     if (ctx.chat.id === DATABASE_GROUP_ID) {
-        // Default: All active
         const selections = { '480p': true, '720p': true, '1080p': true };
         userStates.set(userId, { step: 'AWAITING_BATCH_SELECTION', selections });
         return ctx.reply("🎬 **Batch Inline Menu:** Qualities choose karein jinhe post me rakhna hai (Toggling click kijiye):", {
@@ -393,7 +402,6 @@ bot.action('batchinline_done', async (ctx) => {
     }
 });
 
-
 // 1. DATABASE GROUP, MESSAGE & STATE LOOP LOGIC
 bot.on(['message', 'channel_post'], async (ctx) => {
     const message = ctx.message || ctx.channelPost;
@@ -438,12 +446,11 @@ bot.on(['message', 'channel_post'], async (ctx) => {
         } catch (e) {}
     }
 
-    // --- 🛠️ ONE-TIME MIGRATION COMMAND: /update (Works in both Database & Backup group) ---
+    // --- 🛠️ ONE-TIME MIGRATION COMMAND: /update ---
     if ((chatId === DATABASE_GROUP_ID || chatId === BACKUP_GROUP_ID) && text.startsWith('/update')) {
         try {
             const statusMsg = await ctx.reply("🔄 **Scanning Backup Group history to build Master JSON...** Please wait...");
             
-            // Backup group me se last message id track karne ke liye temp message bhej kar delete karna
             const tempMsg = await ctx.telegram.sendMessage(BACKUP_GROUP_ID, "🔍 Scan Initiated...");
             const latestMsgId = tempMsg.message_id;
             await ctx.telegram.deleteMessage(BACKUP_GROUP_ID, tempMsg.message_id).catch(() => null);
@@ -477,17 +484,17 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 } catch (e) { continue; }
             }
 
-            // Master JSON File bana kar Backup Group me Pin karna
+            isDbRestored = true;
             await saveDbToTelegramImmediate();
 
             try { await ctx.telegram.deleteMessage(chatId, statusMsg.message_id); } catch (e) {}
-            return ctx.reply(`🎉 **Master Update Complete!**\n\n✅ Scanned & Added: **${restoredCount}** records.\n💾 Master File **\`${DB_FILENAME}\`** group me Pin kar di gayi hai!\n\n🚀 Aage se \`/restore\` sirf 2 seconds lega!`, getAdminMenu());
+            return ctx.reply(`🎉 **Master Update Complete!**\n\n✅ Scanned & Added: **${restoredCount}** records.\n💾 Master File **\`${DB_FILENAME}\`** group me Pin kar di gayi hai!`, getAdminMenu());
         } catch (updateErr) {
             return ctx.reply(`❌ **Update Error:** \`${updateErr.message}\``, getAdminMenu());
         }
     }
 
-    // --- ⚡ FAST RESTORE COMMAND: /restore (Works in both Database & Backup group) ---
+    // --- ⚡ FAST RESTORE COMMAND: /restore ---
     if ((chatId === DATABASE_GROUP_ID || chatId === BACKUP_GROUP_ID) && text.startsWith('/restore')) {
         const statusMsg = await ctx.reply("⚡ **Restoring database from Cloud JSON...**");
         const res = await restoreDbFromTelegram();
@@ -513,7 +520,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             currentState.step = 'AWAITING_BATCH_URLS';
             userStates.set(userId, currentState);
 
-            return ctx.reply("🔗 **Send Batch Links:** Ab sabhi quality links sequence me bhejhein (Aap separate lines ya spaces use kar sakte hain)...", getAdminMenu());
+            return ctx.reply("🔗 **Send Batch Links:** Ab sabhi quality links sequence me bhejhein...", getAdminMenu());
         }
 
         // --- BATCH INLINE STATE: AWAITING LINKS & PROCESSING ---
@@ -527,13 +534,12 @@ bot.on(['message', 'channel_post'], async (ctx) => {
 
             let finalQualities = Object.keys(currentState.selections).filter(q => currentState.selections[q]);
 
-            // Override Fallback Rule: Agar links exactly 3 hain, automatically saari standard qualities active karo.
             if (foundLinks.length === 3) {
                 finalQualities = ['480p', '720p', '1080p'];
             }
 
             if (foundLinks.length < finalQualities.length) {
-                return ctx.reply(`❌ Links shortage! Aapne **${finalQualities.length}** qualities select ki thi par sirf **${foundLinks.length}** link(s) diye. Please sabhi ke links bhein ya naye sire se karein.`);
+                return ctx.reply(`❌ Links shortage! Aapne **${finalQualities.length}** qualities select ki thi par sirf **${foundLinks.length}** link(s) diye.`);
             }
 
             const processMsg = await ctx.reply("⏳ **Generating Batch Posts... Please wait...**");
@@ -545,7 +551,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 const postCaption = `⚡ **Quality:** ${currentQuality}\n\n${currentState.caption || ''}`;
 
                 try {
-                    // Photo post with respective inline button
                     const finalPost = await ctx.telegram.sendPhoto(chatId, currentState.photoId, {
                         caption: postCaption,
                         parse_mode: 'Markdown',
@@ -556,10 +561,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                     const encodedParam = Buffer.from(msgIdStr).toString('base64url');
                     const trackerName = `Batch Inline [${currentQuality}] - Msg ID: ${msgIdStr}`;
 
-                    // DB Set
                     fileDb.set(encodedParam, { messageId: finalPost.message_id, name: trackerName });
-
-                    // Log to Backup Group
                     await saveToBackup(encodedParam, finalPost.message_id, trackerName);
 
                     const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
@@ -573,7 +575,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             if (userId) userStates.delete(userId);
             await ctx.telegram.deleteMessage(chatId, processMsg.message_id).catch(() => null);
 
-            return ctx.reply(`📊 **Batch Inline Generated Successfully!**\n\n${outputLinksList.join('\n\n')}\n\n✨ _Aap upar diye gaye links ko directly post me use kar sakte hain!_`, {
+            return ctx.reply(`📊 **Batch Inline Generated Successfully!**\n\n${outputLinksList.join('\n\n')}`, {
                 parse_mode: 'Markdown',
                 ...getAdminMenu()
             });
@@ -594,7 +596,6 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             for (let i = 0; i < foundLinks.length; i++) {
                 const targetUrl = foundLinks[i];
                 try {
-                    // Create text post with dynamic inline button inside database group
                     const textPost = await ctx.telegram.sendMessage(chatId, `✨ **YOUR REQUESTED FILE IS READY!**\n\n🔒 *Your secure download link has been generated successfully. Click the button below to open the downloader and unlock your file.*`, {
                         parse_mode: 'Markdown',
                         ...Markup.inlineKeyboard([[Markup.button.url('🍿 Download/Watch online', targetUrl)]])
@@ -604,10 +605,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                     const encodedParam = Buffer.from(msgIdStr).toString('base64url');
                     const dummyName = `Text Link Post #${msgIdStr}`;
 
-                    // Set in Memory DB
                     fileDb.set(encodedParam, { messageId: textPost.message_id, name: dummyName });
-
-                    // Save to Backup
                     await saveToBackup(encodedParam, textPost.message_id, dummyName);
 
                     const finalBotLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
@@ -621,8 +619,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
             if (userId) userStates.delete(userId);
             await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => null);
             
-            // Send final batch compilation to the Admin
-            return ctx.reply(`📊 **Batch Processing Complete!**\n\n${outputLinksList.join('\n\n')}\n\n✨ _Copy the links above for your channel!_`, {
+            return ctx.reply(`📊 **Batch Processing Complete!**\n\n${outputLinksList.join('\n\n')}`, {
                 parse_mode: 'Markdown',
                 ...getAdminMenu()
             });
@@ -690,7 +687,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 fileDb.set(encodedParam, { messageId: finalPost.message_id, name: fileData.fileName });
                 
                 process.nextTick(async () => {
-                    await saveToBackup(encodedParam, finalPost.message_id, fileData.fileName);
+                    await saveToBackup(encodedParam, fileData.fileName);
                 });
 
                 const botLink = `https://t.me/${ctx.botInfo.username}?start=${encodedParam}`;
@@ -752,8 +749,12 @@ bot.on(['message', 'channel_post'], async (ctx) => {
     }
 });
 
-// Bot launch trigger with cleanup check
-bot.launch().then(() => {
-    console.log("Hotpopkornbot is now online...");
-    runActiveCleanup();
-});
+// ⚡ STRICT STARTUP BLOCKING RESTORE & LAUNCH
+(async () => {
+    console.log("🔍 Pre-loading database from cloud JSON before starting bot...");
+    await restoreDbFromTelegram();
+    
+    bot.launch().then(() => {
+        console.log("Hotpopkornbot is now online and safely restored...");
+    });
+})();
