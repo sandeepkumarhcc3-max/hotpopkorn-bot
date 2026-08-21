@@ -511,7 +511,7 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 return ctx.reply("❌ No valid links found! Please send proper URLs.", getAdminMenu());
             }
 
-            const processingMsg = await ctx.reply(`⏳ **Processing ${foundLinks.length} link(s)... Please wait.**`);
+            const processingMsg = await ctx.reply(`⏳ **Processing ${foundLinks.length} link(s)... Please wait. (Bulk links me thoda time lag sakta hai)**`);
             let outputLinksList = [];
 
             for (let i = 0; i < foundLinks.length; i++) {
@@ -533,15 +533,32 @@ bot.on(['message', 'channel_post'], async (ctx) => {
                 } catch (linkErr) {
                     outputLinksList.push(`❌ **Link ${i+1}:** Failed to process (${targetUrl.substring(0, 20)}...)`);
                 }
+                
+                // 🛑 RATE LIMIT PROTECTOR: 1.5 seconds ka delay add kiya gaya hai taaki APIs block na karein
+                await new Promise(resolve => setTimeout(resolve, 1500));
             }
 
             if (userId) userStates.delete(userId);
             await ctx.telegram.deleteMessage(chatId, processingMsg.message_id).catch(() => null);
             
-            return ctx.reply(`📊 **Batch Processing Complete!**\n\n${outputLinksList.join('\n\n')}`, {
-                parse_mode: 'Markdown',
-                ...getAdminMenu()
-            });
+            // 🛑 MESSAGE LENGTH PROTECTOR: Agar output bohot bada hai, toh usko chunks me break karega
+            let finalMessage = `📊 **Batch Processing Complete!**\n\n`;
+            for (const outLink of outputLinksList) {
+                // Telegram max limit 4096 hai, safe side ke liye 3800 par cut kar rahe hain
+                if ((finalMessage.length + outLink.length) > 3800) {
+                    await ctx.reply(finalMessage, { parse_mode: 'Markdown' });
+                    finalMessage = ""; // Naye part ke liye clear karein
+                }
+                finalMessage += outLink + '\n\n';
+            }
+            
+            if (finalMessage.trim().length > 0) {
+                return ctx.reply(finalMessage, {
+                    parse_mode: 'Markdown',
+                    ...getAdminMenu()
+                });
+            }
+            return;
         }
 
         let currentFileObj = message.video || message.document || message.audio || message.animation || message.video_note || (message.photo ? message.photo[message.photo.length - 1] : null);
